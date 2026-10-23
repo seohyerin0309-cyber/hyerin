@@ -67,7 +67,9 @@ const SCALE_HZ     = [262, 294, 330, 392, 440, 523, 587, 659, 784]; // 종소리
 // 밀어내는 위치
 const PUSH_RADIUS = 110;   // 마우스일 때 범위 반지름(px)
 const HAND_RADIUS = 0.55;  // 손 크기 대비 범위 (클수록 넓게 밀어냄)
-const FACE_RADIUS = 0.40;  // 얼굴 너비 대비 범위
+const BODY_SCALE  = 1.0;   // 몸 영역 크기 배율 (줄이 몸에서 더 떨어지길 원하면 1.2처럼 키우기)
+const BODY_MARGIN = 6;     // 몸 둘레 여유(px)
+const SHOW_BODY   = false; // true로 바꾸면 인식된 몸 영역(머리·어깨·팔)을 선으로 보여줘요
 
 /* ============ 밀어내는 위치 ============ */
 // 좌표는 화면(px). id가 같으면 이전 프레임과 비교해 이동 속도를 계산합니다.
@@ -93,6 +95,30 @@ cv.addEventListener("pointerup", e => { if (e.pointerType !== "mouse") { mousePu
 const ctx = cv.getContext("2d");
 const video = document.getElementById("cam");
 let W, H, strings = [], videoOn = false, energy = 0, hitX = 0.5;
+let bodyShapes = [];   // 몸 영역: 캡슐(두 점 + 굵기) 목록, 화면 px. 줄이 이 안으로 들어가지 못해요.
+let bodyHit = 0;
+
+function collideBody(pts) {
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    for (const c of bodyShapes) {
+      const abx = c.bx - c.ax, aby = c.by - c.ay;
+      let t = ((p.x - c.ax) * abx + (p.y - c.ay) * aby) / (abx * abx + aby * aby || 1);
+      t = Math.max(0, Math.min(1, t));
+      const qx = c.ax + abx * t, qy = c.ay + aby * t;
+      const dx = p.x - qx, dy = p.y - qy, d = Math.hypot(dx, dy), R = c.r + BODY_MARGIN;
+      if (d < R) {
+        const nx = d > 0.001 ? dx / d : 0, ny = d > 0.001 ? dy / d : -1;
+        const sx = nx * (R - d), sy = ny * (R - d);
+        p.x += sx; p.y += sy;
+        p.px += sx; p.py += sy;                    // 속도는 유지 → 몸 표면을 타고 미끄러져요
+        p.px += (p.x - p.px) * 0.25;               // 약간의 마찰
+        p.py += (p.y - p.py) * 0.25;
+        bodyHit += Math.min(Math.hypot(sx, sy), 6);
+      }
+    }
+  }
+}
 
 function build() {
   const dpr = window.devicePixelRatio || 1;
@@ -117,7 +143,7 @@ function build() {
 }
 
 function step() {
-  let e = 0, ex = 0;
+  let e = 0, ex = 0; bodyHit = 0;
   for (const pts of strings) {
     for (let i = 1; i < pts.length; i++) {
       const p = pts[i];
@@ -154,8 +180,10 @@ function step() {
         if (i - 1 === 0) { b.x -= dx * diff; b.y -= dy * diff; }
         else { a.x += dx * diff * 0.5; a.y += dy * diff * 0.5; b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5; }
       }
+      if (bodyShapes.length) collideBody(pts);
     }
   }
+  e += bodyHit * 0.04;
   energy = Math.min(e, 12); if (e > 0) hitX = ex / e / W;
   for (const m of pushers) { m.vx *= 0.8; m.vy *= 0.8; }
 }
@@ -192,6 +220,10 @@ function draw() {
     }
   }
   ctx.shadowBlur = 0;
+  if (SHOW_BODY) {
+    ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineCap = "round";
+    for (const c of bodyShapes) { ctx.lineWidth = c.r * 2; ctx.beginPath(); ctx.moveTo(c.ax, c.ay); ctx.lineTo(c.bx, c.by); ctx.stroke(); }
+  }
 }
 
 /* ============ 소리 ============ */
@@ -228,9 +260,8 @@ function updateAudio(now) {
 
 /* ============ 손·얼굴 인식 (MediaPipe) ============ */
 const msg = document.getElementById("msg");
-let handLM = null, faceLM = null, lastVideoTime = -1;
+let handLM = null, poseLM = null, lastVideoTime = -1;
 const HAND_POINTS = [0, 4, 8, 12, 16, 20, 5, 9, 13, 17];
-const FACE_POINTS = [10, 152, 234, 454, 1, 50, 280];   // 이마, 턱, 양볼, 코, 양쪽 뺨
 
 function toScreen(lm) {                                 // 영상 좌표(0~1) → 화면 px (거울 + cover)
   const vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh);
@@ -243,7 +274,7 @@ async function startCamera() {
   video.srcObject = stream; await video.play(); videoOn = true;
   msg.textContent = "손과 얼굴 인식 준비 중…";
   const V = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-  const { FilesetResolver, HandLandmarker, FaceLandmarker } = await import(V + "/vision_bundle.mjs");
+  const { FilesetResolver, HandLandmarker, PoseLandmarker } = await import(V + "/vision_bundle.mjs");
   const files = await FilesetResolver.forVisionTasks(V + "/wasm");
   const M = "https://storage.googleapis.com/mediapipe-models/";
   const make = async (Cls, path, extra) => {
@@ -253,13 +284,36 @@ async function startCamera() {
     }
   };
   handLM = await make(HandLandmarker, "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", { numHands: 2 });
-  faceLM = await make(FaceLandmarker, "face_landmarker/face_landmarker/float16/1/face_landmarker.task", { numFaces: 1 });
-  msg.textContent = "손을 흔들거나 커튼 사이로 들어가 보세요";
+  poseLM = await make(PoseLandmarker, "pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", { numPoses: 1 });
+  msg.textContent = "커튼 사이로 들어가 보세요. 머리와 어깨 위로 줄이 걸쳐져요";
   setTimeout(() => { msg.textContent = ""; }, 5000);
 }
 
+function bodyFromPose(lm) {
+  const P = i => ({ ...toScreen(lm[i]), v: lm[i].visibility ?? 1 });
+  const ok = (...ids) => ids.every(i => (lm[i].visibility ?? 1) > 0.4);
+  const out = [], K = BODY_SCALE;
+  const cap = (a, b, r) => out.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y, r: r * K });
+  const el = P(7), er = P(8), ls = P(11), rs = P(12);
+  const ear = Math.hypot(el.x - er.x, el.y - er.y), sw = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+  const hr = Math.max(30, ear * 0.9);
+  const head = { x: (el.x + er.x) / 2, y: (el.y + er.y) / 2 - hr * 0.15 };
+  cap(head, head, hr);                                            // 머리
+  const sm = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
+  cap(head, sm, sw * 0.17);                                       // 목
+  cap(ls, rs, sw * 0.2);                                          // 어깨
+  const top = { x: sm.x, y: sm.y + sw * 0.25 };
+  const bottom = ok(23, 24) ? { x: (P(23).x + P(24).x) / 2, y: (P(23).y + P(24).y) / 2 } : { x: sm.x, y: sm.y + sw * 2.5 };
+  cap(top, bottom, sw * 0.42);                                    // 몸통
+  if (ok(11, 13)) cap(ls, P(13), sw * 0.17);                      // 팔
+  if (ok(12, 14)) cap(rs, P(14), sw * 0.17);
+  if (ok(13, 15)) cap(P(13), P(15), sw * 0.14);
+  if (ok(14, 16)) cap(P(14), P(16), sw * 0.14);
+  return out;
+}
+
 function track() {
-  if (!handLM || !faceLM || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  if (!handLM || !poseLM || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   const ts = performance.now(), list = [];
   const hands = handLM.detectForVideo(video, ts).landmarks || [];
@@ -268,12 +322,8 @@ function track() {
     const r = Math.max(30, Math.hypot(a.x - b.x, a.y - b.y) * HAND_RADIUS);
     HAND_POINTS.forEach(i => { const p = toScreen(lm[i]); list.push({ id: "h" + h + "_" + i, x: p.x, y: p.y, radius: r }); });
   });
-  const faces = faceLM.detectForVideo(video, ts).faceLandmarks || [];
-  faces.forEach(lm => {
-    const l = toScreen(lm[234]), rr = toScreen(lm[454]);
-    const r = Math.max(40, Math.hypot(l.x - rr.x, l.y - rr.y) * FACE_RADIUS);
-    FACE_POINTS.forEach(i => { const p = toScreen(lm[i]); list.push({ id: "f_" + i, x: p.x, y: p.y, radius: r }); });
-  });
+  const poses = poseLM.detectForVideo(video, ts).landmarks || [];
+  bodyShapes = poses.length ? bodyFromPose(poses[0]) : [];
   trackedPushers = list; refreshPushers();
 }
 
