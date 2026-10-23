@@ -42,7 +42,7 @@
 <script>
 /* ============ 여기만 바꾸면 됩니다 ============ */
 
-const STRING_SPACING = 100;    // 줄 사이 간격(px) — 클수록 듬성듬성
+const STRING_SPACING = 200;    // 줄 사이 간격(px) — 클수록 듬성듬성
 const LENGTH_RATIO   = 1.05;   // 줄 길이 (화면 높이의 몇 배, 1 이상이면 바닥까지)
 const BG_COLOR       = "#d8d1c6";
 const VIDEO_DIM      = 0.8;    // 카메라 영상 밝기 (0 = 안 보임, 1 = 원본)
@@ -55,17 +55,17 @@ const PIECE_ALPHA  = 0.58;       // 투명도 (낮을수록 더 비쳐 보여요
 const THREAD_COLOR = "rgba(110,104,98,0.55)";   // 실 색
 // 색 팔레트 [R, G, B] — 채도 낮은 청록·보라·올리브·살구·진주색
 const PALETTE = [
-  [111,163,160], [143,184,180], [166,139,181], [183,162,196], [163,165,111], [184,187,138],
-  [227,185,154], [220,165,138], [232,224,204], [159,176,181], [122,150,130],
+  [196,120,92], [210,150,118], [140,152,102], [166,172,120], [96,146,154], [120,168,168],
+  [164,134,176], [186,160,194], [196,134,154], [226,216,188], [126,132,138], [92,92,98],
 ];
 
 // 색 빛 (슬라이더 시작값. 화면의 '빛 조절' 버튼에서 바꿀 수 있어요)
 const LIGHT_DEFAULT = { alpha: 0.22,   // 빛 투명도 (0 ~ 0.6, 낮을수록 은은)
-                        blur: 6,       // 가장자리 흐림(px)
+                        blur: 8,       // 가장자리 흐림(px)
                         gold: 0.12,    // 따뜻한 금빛 정도
-                        follow: 0.05,  // 빛이 줄을 따라오는 속도 (낮을수록 느리고 부드러움)
-                        move: 0.35 };  // 빛이 움직이는 거리 (줄 움직임의 몇 배)
-const LIGHT_SHADOW = 0.16;   // 조각 사이 빈 곳과 줄의 회색 그림자 진하기
+                        follow: 0.08,  // 빛이 줄을 따라오는 속도 (낮을수록 느리고 부드러움)
+                        move: 0.8 };   // 그림자가 조각을 따라 움직이는 거리 (1 = 조각과 같게)
+const SHADOW_OFFSET = [28, 48];   // 그림자가 조각에서 떨어지는 방향·거리(px)
 const HAND_SMOOTH  = 0.3;    // 손 떨림 줄이기 (낮을수록 부드럽지만 반응이 느려져요)
 
 // 움직임 느낌 (무거운 조각은 천천히, 가벼운 조각은 빠르게 흔들려요)
@@ -76,9 +76,9 @@ const PUSH_SWEEP = 0.4;    // 손이 움직이는 속도가 조각에 전달되�
 
 // 소리
 const SOUND_ON     = true;
-const SOUND_VOLUME = 0.25;                      // 0 ~ 1
+const SOUND_VOLUME = 0.12;                      // 0 ~ 1
 const SCALE_HZ     = [262, 294, 330, 392, 440, 523, 587, 659, 784]; // 종소리 음계(도레미솔라...)
-const CLICK_VOLUME = 1.0;                       // 조각 부딪히는 딸깍 소리 배율 (0이면 끔)
+const CLICK_VOLUME = 0;                         // 조각 부딪히는 딸깍 소리 배율 (0이면 끔)
 
 // 밀어내는 위치
 const PUSH_RADIUS = 110;   // 마우스일 때 범위 반지름(px)
@@ -113,7 +113,7 @@ const video = document.getElementById("cam");
 const S = 2;   // 조각 그림을 2배 크기로 미리 그려 두어 선명하게
 let W, H, strings = [], videoOn = false, energy = 0, hitX = 0.5, NOW = 0, clickBudget = 0;
 let bodyShapes = [];   // 몸 영역: 캡슐(두 점 + 굵기) 목록, 화면 px. 조각이 이 안으로 들어가지 못해요.
-let bodyHit = 0;
+let bodyHit = 0, casters = [];
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -134,35 +134,55 @@ function shapePath(c, type, w, h) {
   } else c.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);   // disc, oval
 }
 
-// 조개 결 느낌의 반투명 조각 그림 한 장
+// 조개 껍데기(캐피즈) 느낌의 반투명 조각 그림 한 장
 function makeSprite(type, w, h, col) {
-  const pad = 4, cw = Math.ceil((w + pad * 2) * S), ch = Math.ceil((h + pad * 2) * S);
+  const pad = 5, cw = Math.ceil((w + pad * 2) * S), ch = Math.ceil((h + pad * 2) * S);
   const cvs = document.createElement("canvas"); cvs.width = cw; cvs.height = ch;
   const c = cvs.getContext("2d");
   c.scale(S, S); c.translate(cw / S / 2, ch / S / 2);
-  const size = Math.max(w, h);
+  const size = Math.max(w, h), dark = shade(col, 0.5), light = shade(col, 1.35);
   c.save();
   shapePath(c, type, w, h); c.clip();
-  c.fillStyle = rgba(col, PIECE_ALPHA); c.fillRect(-w, -h, w * 2, h * 2);               // 바탕색
-  const g = c.createRadialGradient(-w * 0.2, -h * 0.25, 0, -w * 0.2, -h * 0.25, size * 0.85);
-  g.addColorStop(0, "rgba(255,255,255,0.38)"); g.addColorStop(1, "rgba(255,255,255,0)");
-  c.fillStyle = g; c.fillRect(-w, -h, w * 2, h * 2);                                      // 진주빛 광택
-  for (let n = 0; n < 8; n++) {                                                           // 얼룩
-    const x = rnd(-w / 2, w / 2), y = rnd(-h / 2, h / 2), r = rnd(0.12, 0.36) * size;
+  c.fillStyle = rgba(col, PIECE_ALPHA); c.fillRect(-w, -h, w * 2, h * 2);                       // 바탕색
+  const body = c.createRadialGradient(0, 0, size * 0.1, 0, 0, size * 0.62);                       // 가운데는 맑고 가장자리는 짙게
+  body.addColorStop(0, rgba(light, 0.22)); body.addColorStop(0.7, rgba(col, 0)); body.addColorStop(1, rgba(dark, 0.3));
+  c.fillStyle = body; c.fillRect(-w, -h, w * 2, h * 2);
+  for (let n = 0; n < 9; n++) {                                                                   // 구름 같은 얼룩
+    const x = rnd(-w / 2, w / 2), y = rnd(-h / 2, h / 2), r = rnd(0.12, 0.4) * size;
     const sg = c.createRadialGradient(x, y, 0, x, y, r);
-    sg.addColorStop(0, rgba(shade(col, Math.random() < 0.6 ? 0.55 : 1.25), rnd(0.12, 0.26))); sg.addColorStop(1, rgba(col, 0));
+    sg.addColorStop(0, rgba(Math.random() < 0.6 ? dark : light, rnd(0.1, 0.24))); sg.addColorStop(1, rgba(col, 0));
     c.fillStyle = sg; c.fillRect(x - r, y - r, r * 2, r * 2);
   }
-  const ox = pick([-1, 1]) * w * 0.9, oy = pick([-1, 1]) * h * 0.9;                       // 조개 성장선
-  c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 0.8;
-  for (let r = size * 0.3; r < size * 2.2; r += size * 0.1 + Math.random() * 4) { c.beginPath(); c.arc(ox, oy, r, 0, Math.PI * 2); c.stroke(); }
-  c.strokeStyle = "rgba(255,255,255,0.22)"; c.lineWidth = 3; shapePath(c, type, w, h); c.stroke();  // 안쪽 테두리 빛
+  for (let n = 0; n < 2; n++) {                                                                   // 가장자리의 진한 점 얼룩
+    const a = rnd(0, Math.PI * 2), x = Math.cos(a) * w * 0.4, y = Math.sin(a) * h * 0.4, r = rnd(0.05, 0.12) * size;
+    const sg = c.createRadialGradient(x, y, 0, x, y, r);
+    sg.addColorStop(0, rgba(shade(col, 0.3), rnd(0.25, 0.45))); sg.addColorStop(1, rgba(col, 0));
+    c.fillStyle = sg; c.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  const ox = pick([-1, 1]) * w * 0.55, oy = pick([-1, 1]) * h * 0.55;                             // 껍데기 성장선
+  for (let r = size * 0.15, i = 0; r < size * 1.8; r += size * 0.045 + Math.random() * 3, i++) {
+    c.strokeStyle = i % 3 ? "rgba(255,255,255,0.13)" : rgba(dark, 0.1); c.lineWidth = 0.6 + Math.random() * 0.5;
+    c.beginPath(); c.arc(ox, oy, r, 0, Math.PI * 2); c.stroke();
+  }
+  for (let n = 0; n < Math.round(size * 2.2); n++) {                                              // 고운 결 알갱이
+    c.fillStyle = Math.random() < 0.5 ? "rgba(255,255,255,0.12)" : rgba(dark, 0.1);
+    c.fillRect(rnd(-w / 2, w / 2), rnd(-h / 2, h / 2), 0.9, 0.9);
+  }
+  const hl = c.createLinearGradient(-w * 0.45, -h * 0.5, w * 0.1, h * 0.1);                       // 매끈한 광택
+  hl.addColorStop(0, "rgba(255,255,255,0.4)"); hl.addColorStop(0.35, "rgba(255,255,255,0.08)"); hl.addColorStop(1, "rgba(255,255,255,0)");
+  c.fillStyle = hl; c.fillRect(-w, -h, w * 2, h * 2);
+  c.strokeStyle = rgba(dark, 0.32); c.lineWidth = 3.2; shapePath(c, type, w, h); c.stroke();      // 안쪽 두께감(가장자리 그늘)
   c.restore();
-  shapePath(c, type, w, h); c.strokeStyle = rgba(shade(col, 0.6), 0.5); c.lineWidth = 1; c.stroke();   // 바깥 테두리
-  const inset = Math.max(5, h * 0.13);                                                    // 실이 지나가는 작은 구멍 (위·아래)
+  c.save(); c.translate(0.7, 0.9); shapePath(c, type, w, h);                                      // 두께: 아래쪽 어두운 테두리
+  c.strokeStyle = rgba(dark, 0.3); c.lineWidth = 1; c.stroke(); c.restore();
+  shapePath(c, type, w, h); c.strokeStyle = rgba(dark, 0.55); c.lineWidth = 0.9; c.stroke();      // 바깥 테두리
+  c.save(); c.translate(-0.4, -0.5); shapePath(c, type, w, h);                                    // 위쪽 밝은 모서리
+  c.strokeStyle = "rgba(255,255,255,0.35)"; c.lineWidth = 0.7; c.stroke(); c.restore();
+  const inset = Math.max(5, h * 0.13);                                                            // 실이 지나가는 구멍 (위·아래)
   for (const y of [-h / 2 + inset, h / 2 - inset]) {
-    c.save(); c.globalCompositeOperation = "destination-out"; c.beginPath(); c.arc(0, y, 2.1, 0, Math.PI * 2); c.fill(); c.restore();
-    c.strokeStyle = "rgba(70,65,60,0.55)"; c.lineWidth = 0.8; c.beginPath(); c.arc(0, y, 2.3, 0, Math.PI * 2); c.stroke();
+    c.save(); c.globalCompositeOperation = "destination-out"; c.beginPath(); c.arc(0, y, 2.2, 0, Math.PI * 2); c.fill(); c.restore();
+    c.strokeStyle = rgba(dark, 0.7); c.lineWidth = 1; c.beginPath(); c.arc(0, y, 2.4, 0, Math.PI * 2); c.stroke();
+    c.strokeStyle = "rgba(255,255,255,0.4)"; c.lineWidth = 0.6; c.beginPath(); c.arc(0.3, y + 0.4, 3.3, 0, Math.PI * 2); c.stroke();
   }
   return cvs;
 }
@@ -171,13 +191,13 @@ function makePiece(big) {
   const size = big ? rnd(...PIECE_BIG) : rnd(...PIECE_SMALL);
   let type = pick(["disc", "oval", "ring", "square"]);
   if (type === "ring" && size < 34) type = "disc";
-  let w = size, h = size;
-  if (type === "oval") { w = size * 0.62; h = size * 1.35; }
-  if (type === "square") { w = size * 0.92; h = size * 0.8; }
+  let w = size * rnd(0.95, 1.05), h = size * rnd(0.95, 1.05);
+  if (type === "oval") { w = size * 0.62 * rnd(0.95, 1.05); h = size * 1.35; }
+  if (type === "square") { w = size * 0.92 * rnd(0.95, 1.05); h = size * 0.8; }
   const m = Math.max(0.5, Math.min(2.8, (w * h) / 2400)), k = 1 / m;     // 클수록 무겁다
   const col = pick(PALETTE);
   return { w, h, m, k, type, col, r: (w + h) / 4, ret: 0.5 + 0.5 * k, damp: 0.978 + 0.012 * (m / 2.8),
-           sw: 0, last: 0, lsw: 0, la: rnd(0.7, 1), sprite: makeSprite(type, w, h, col) };
+           sw: 0, last: 0, lsw: 0, tilt: rnd(-0.08, 0.08), la: rnd(0.7, 1), sprite: makeSprite(type, w, h, col) };
 }
 
 function build() {
@@ -200,6 +220,13 @@ function build() {
       pts.push(p);
     }
     strings.push(pts);
+  }
+  casters = [];                                         // 그림자(색 빛)를 만드는 조각: 2~3개만
+  const picks = Math.min(3, strings.length);
+  for (let n = 0; n < picks; n++) {
+    const pts = strings[Math.floor((n + 0.5) * strings.length / picks)];
+    const cand = pts.filter((p, i) => i > 0 && p.ry > H * 0.2 && p.ry < H * 0.7 && p.m > 1.2);
+    casters.push(cand.length ? pick(cand) : pts[Math.min(3, pts.length - 1)]);
   }
 }
 
@@ -327,16 +354,17 @@ SLIDERS.forEach(([key, name, min, max, stepv]) => {
 document.getElementById("lightBtn").onclick = () => { panel.hidden = !panel.hidden; };
 
 const mk = () => document.createElement("canvas");
-const lc = mk(), ls = mk(), lf = mk();                      // 색 빛 / 그림자 / 얼굴용 빛 (작게 그려서 부드럽게)
+const lc = mk(), lf = mk();                                 // 색 그림자 / 얼굴 쪽 그림자 (작게 그려서 부드럽게)
 const LS = 0.4, canFilter = "filter" in ctx;
 let face = { x: 0, y: 0, r: 100, w: 0 }, faceT = null, faceOn = 0;
 
 function updateLight(now) {
   const dx = Math.sin(now * 0.0003) * 6, dy = Math.cos(now * 0.00025) * 4;      // 햇빛의 아주 느린 흔들림
-  for (const pts of strings) for (let i = 1; i < pts.length; i++) {
-    const p = pts[i];
-    const tx = p.rx + (p.x - p.rx) * LIGHT.move + dx, ty = p.ry + (p.y - p.ry) * LIGHT.move + dy;
-    p.lx += (tx - p.lx) * LIGHT.follow; p.ly += (ty - p.ly) * LIGHT.follow;      // 줄보다 훨씬 느리게 따라옴
+  for (const p of casters) {
+    const tx = p.rx + (p.x - p.rx) * LIGHT.move + SHADOW_OFFSET[0] + dx;        // 조각을 따라가는 그림자 위치
+    const ty = p.ry + (p.y - p.ry) * LIGHT.move + SHADOW_OFFSET[1] + dy;
+    if (p.lx === undefined || p.lx === p.x) { p.lx = tx; p.ly = ty; }
+    p.lx += (tx - p.lx) * LIGHT.follow; p.ly += (ty - p.ly) * LIGHT.follow;     // 조각보다 느리고 부드럽게 따라옴
     p.lsw += (p.sw * LIGHT.move - p.lsw) * LIGHT.follow;
   }
   if (faceT) {
@@ -347,28 +375,21 @@ function updateLight(now) {
 }
 
 function lightShape(c, p) {
-  c.save(); c.translate(p.lx * LS, p.ly * LS); c.rotate(p.lsw); c.scale(LS * 1.04, LS * 1.04);
+  c.save(); c.translate(p.lx * LS, p.ly * LS); c.rotate(p.lsw + p.tilt); c.scale(LS * 1.08, LS * 1.08);
   shapePath(c, p.type, p.w, p.h); c.restore();
 }
 
 function drawLight() {
+  if (!casters.length) return;
   const lw = Math.ceil(W * LS), lh = Math.ceil(H * LS);
-  for (const c of [lc, ls, lf]) if (c.width !== lw || c.height !== lh) { c.width = lw; c.height = lh; }
-  const cc = lc.getContext("2d"), sc = ls.getContext("2d"), fc = lf.getContext("2d");
-  cc.clearRect(0, 0, lw, lh);                                  // 색 빛: 조각 모양 그대로
-  for (const pts of strings) for (let i = 1; i < pts.length; i++) {
-    const p = pts[i]; lightShape(cc, p); cc.fillStyle = rgba(p.col, 0.95 * p.la); cc.fill();
+  for (const c of [lc, lf]) if (c.width !== lw || c.height !== lh) { c.width = lw; c.height = lh; }
+  const cc = lc.getContext("2d"), fc = lf.getContext("2d");
+  cc.clearRect(0, 0, lw, lh);                                  // 조각 색에 맞춘 연한 파스텔 그림자
+  for (const p of casters) {
+    lightShape(cc, p);
+    cc.fillStyle = rgba(p.col.map(v => Math.round(v + (255 - v) * 0.5)), 1); cc.fill();
   }
-  sc.globalCompositeOperation = "source-over"; sc.clearRect(0, 0, lw, lh);   // 그림자: 전체를 덮고 조각만 뚫음
-  sc.fillStyle = `rgba(70,68,78,${LIGHT_SHADOW})`; sc.fillRect(0, 0, lw, lh);
-  sc.strokeStyle = `rgba(60,58,66,${LIGHT_SHADOW * 1.8})`; sc.lineWidth = 1.5;
-  sc.beginPath();
-  for (const pts of strings) { sc.moveTo(pts[0].rx * LS, -10); for (let i = 1; i < pts.length; i++) sc.lineTo(pts[i].lx * LS, pts[i].ly * LS); }
-  sc.stroke();
-  sc.globalCompositeOperation = "destination-out"; sc.fillStyle = "rgba(0,0,0,0.92)";
-  for (const pts of strings) for (let i = 1; i < pts.length; i++) { lightShape(sc, pts[i]); sc.fill(); }
-  sc.globalCompositeOperation = "source-over";
-  if (face.w > 0.02) {                                         // 얼굴 쪽 빛을 조금 더
+  if (face.w > 0.02) {                                         // 얼굴 쪽에 조금 더 진하게
     fc.globalCompositeOperation = "source-over"; fc.clearRect(0, 0, lw, lh); fc.drawImage(lc, 0, 0);
     const g = fc.createRadialGradient(face.x * LS, face.y * LS, 0, face.x * LS, face.y * LS, face.r * LS);
     g.addColorStop(0, "rgba(0,0,0,1)"); g.addColorStop(1, "rgba(0,0,0,0)");
@@ -377,9 +398,9 @@ function drawLight() {
   ctx.save();
   if (canFilter && LIGHT.blur > 0) ctx.filter = `blur(${LIGHT.blur}px)`;     // 가장자리만 살짝 흐리게
   ctx.imageSmoothingEnabled = true;
-  ctx.globalCompositeOperation = "multiply"; ctx.drawImage(ls, 0, 0, W, H);   // 회색 그림자
-  ctx.globalCompositeOperation = "overlay"; ctx.globalAlpha = LIGHT.alpha; ctx.drawImage(lc, 0, 0, W, H);   // 색 빛
-  if (face.w > 0.02) { ctx.globalAlpha = LIGHT.alpha * 0.7 * face.w; ctx.drawImage(lf, 0, 0, W, H); }
+  ctx.globalCompositeOperation = "multiply"; ctx.globalAlpha = Math.min(1, LIGHT.alpha * 2);
+  ctx.drawImage(lc, 0, 0, W, H);
+  if (face.w > 0.02) { ctx.globalAlpha = Math.min(1, LIGHT.alpha * 1.2 * face.w); ctx.drawImage(lf, 0, 0, W, H); }
   ctx.restore();
   if (LIGHT.gold > 0) {                                        // 따뜻한 저녁 햇빛 톤
     ctx.save(); ctx.globalCompositeOperation = "soft-light";
@@ -399,7 +420,7 @@ function draw() {
   for (const pts of strings) {                           // 조각
     for (let i = 1; i < pts.length; i++) {
       const p = pts[i], a = pts[i - 1], b = pts[Math.min(i + 1, pts.length - 1)];
-      const ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.PI / 2 + p.sw;
+      const ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.PI / 2 + p.sw + p.tilt;
       ctx.save();
       ctx.translate(p.x, p.y); ctx.rotate(ang);
       ctx.drawImage(p.sprite, -p.sprite.width / S / 2, -p.sprite.height / S / 2, p.sprite.width / S, p.sprite.height / S);
