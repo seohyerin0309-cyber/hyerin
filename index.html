@@ -42,7 +42,7 @@ const TEXT_LINES = [
   "돌아오는 길에 비로소 떠나온 곳이 보인다",
 ];
 
-const STRING_SPACING = 46;     // 줄 사이 간격(px) — 클수록 듬성듬성
+const STRING_SPACING = 90;     // 줄 사이 간격(px) — 클수록 듬성듬성
 const FONT_SIZE      = 20;     // 글자 크기(px)
 const CHAR_SPACING   = 26;     // 글자 사이 세로 간격(px)
 const LENGTH_RATIO   = 1.05;   // 줄 길이 (화면 높이의 몇 배, 1 이상이면 바닥까지)
@@ -138,7 +138,7 @@ function step() {
             const k = (m.radius * 0.5 - d) * 0.25;
             p.x += (dx / d) * k; p.y += (dy / d) * k * 0.3;
           }
-          const w = f * (0.3 + sp * 0.15);
+          const w = f * sp * 0.12;            // 움직일 때만 소리 (가만히 있으면 무음)
           e += w; ex += w * m.x;
         }
       }
@@ -156,7 +156,7 @@ function step() {
       }
     }
   }
-  energy = e; if (e > 0) hitX = ex / e / W;
+  energy = Math.min(e, 12); if (e > 0) hitX = ex / e / W;
   for (const m of pushers) { m.vx *= 0.8; m.vy *= 0.8; }
 }
 
@@ -212,15 +212,15 @@ function startAudio() {
 function updateAudio(now) {
   if (!ac) return;
   const t = ac.currentTime;
-  noiseGain.gain.setTargetAtTime(Math.min(0.22, energy * 0.012) * SOUND_VOLUME * 2, t, 0.06);   // 스르륵 천 스치는 소리
+  noiseGain.gain.setTargetAtTime(Math.min(0.06, energy * 0.004) * SOUND_VOLUME * 2, t, 0.06);   // 스르륵 천 스치는 소리
   noiseFilter.frequency.setTargetAtTime(900 + Math.min(energy, 20) * 130, t, 0.08);
-  if (energy > 3 && now - lastChime > 220) {                                                   // 가끔 울리는 맑은 종소리
+  if (energy > 5 && now - lastChime > 600) {                                                   // 가끔 울리는 맑은 종소리
     lastChime = now;
     const f = SCALE_HZ[Math.min(SCALE_HZ.length - 1, Math.floor(hitX * SCALE_HZ.length))];
     const o = ac.createOscillator(), g = ac.createGain();
     o.type = "sine"; o.frequency.value = f;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.16 * SOUND_VOLUME, t + 0.01);
+    g.gain.linearRampToValueAtTime(0.10 * SOUND_VOLUME, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
     o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 1.7);
   }
