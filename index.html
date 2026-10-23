@@ -16,6 +16,13 @@
   #start button { font: inherit; font-size: 16px; color: #fff; background: transparent; cursor: pointer;
                   border: 1px solid rgba(255,255,255,.8); border-radius: 999px; padding: 12px 28px; }
   #start button.sub { border-color: rgba(255,255,255,.3); font-size: 14px; padding: 9px 20px; opacity: .8; }
+  #lightBtn { position: fixed; top: 12px; left: 12px; z-index: 5; font: inherit; font-size: 13px; color: #fff;
+              background: rgba(40,36,32,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 999px; padding: 7px 14px; cursor: pointer; }
+  #panel { position: fixed; top: 52px; left: 12px; z-index: 5; width: min(260px, calc(100vw - 24px)); box-sizing: border-box;
+           padding: 12px 14px; border-radius: 14px; background: rgba(40,36,32,.7); color: #fff; font-size: 13px; }
+  #panel label { display: block; margin-bottom: 10px; }
+  #panel label span { float: right; opacity: .7; font-variant-numeric: tabular-nums; }
+  #panel input { width: 100%; margin: 6px 0 0; }
   #msg { position: fixed; left: 0; right: 0; bottom: 16px; text-align: center; font-size: 13px; opacity: .7;
          pointer-events: none; }
 </style>
@@ -29,6 +36,8 @@
   <button id="btnCam">카메라 켜기</button>
   <button id="btnMouse" class="sub">마우스/터치로만 해보기</button>
 </div>
+<button id="lightBtn">빛 조절</button>
+<div id="panel" hidden></div>
 <div id="msg"></div>
 <script>
 /* ============ 여기만 바꾸면 됩니다 ============ */
@@ -49,6 +58,15 @@ const PALETTE = [
   [111,163,160], [143,184,180], [166,139,181], [183,162,196], [163,165,111], [184,187,138],
   [227,185,154], [220,165,138], [232,224,204], [159,176,181], [122,150,130],
 ];
+
+// 색 빛 (슬라이더 시작값. 화면의 '빛 조절' 버튼에서 바꿀 수 있어요)
+const LIGHT_DEFAULT = { alpha: 0.22,   // 빛 투명도 (0 ~ 0.6, 낮을수록 은은)
+                        blur: 6,       // 가장자리 흐림(px)
+                        gold: 0.12,    // 따뜻한 금빛 정도
+                        follow: 0.05,  // 빛이 줄을 따라오는 속도 (낮을수록 느리고 부드러움)
+                        move: 0.35 };  // 빛이 움직이는 거리 (줄 움직임의 몇 배)
+const LIGHT_SHADOW = 0.16;   // 조각 사이 빈 곳과 줄의 회색 그림자 진하기
+const HAND_SMOOTH  = 0.3;    // 손 떨림 줄이기 (낮을수록 부드럽지만 반응이 느려져요)
 
 // 움직임 느낌 (무거운 조각은 천천히, 가벼운 조각은 빠르게 흔들려요)
 const GRAVITY    = 0.25;   // 늘어지는 힘
@@ -157,8 +175,9 @@ function makePiece(big) {
   if (type === "oval") { w = size * 0.62; h = size * 1.35; }
   if (type === "square") { w = size * 0.92; h = size * 0.8; }
   const m = Math.max(0.5, Math.min(2.8, (w * h) / 2400)), k = 1 / m;     // 클수록 무겁다
-  return { w, h, m, k, r: (w + h) / 4, ret: 0.5 + 0.5 * k, damp: 0.978 + 0.012 * (m / 2.8),
-           sw: 0, last: 0, sprite: makeSprite(type, w, h, pick(PALETTE)) };
+  const col = pick(PALETTE);
+  return { w, h, m, k, type, col, r: (w + h) / 4, ret: 0.5 + 0.5 * k, damp: 0.978 + 0.012 * (m / 2.8),
+           sw: 0, last: 0, lsw: 0, la: rnd(0.7, 1), sprite: makeSprite(type, w, h, col) };
 }
 
 function build() {
@@ -177,7 +196,7 @@ function build() {
       const p = makePiece((i + s) % 2 === 0);
       const len = i === 1 ? p.h / 2 + 20 : prevH / 2 + p.h / 2 + PIECE_GAP;
       y += len; prevH = p.h;
-      Object.assign(p, { x, y, px: x, py: y, rx: x, ry: y, len });
+      Object.assign(p, { x, y, px: x, py: y, rx: x, ry: y, len, lx: x, ly: y });
       pts.push(p);
     }
     strings.push(pts);
@@ -291,10 +310,88 @@ function drawVideo() {
   ctx.restore();
 }
 
+
+/* ============ 색 빛 (조각을 통과한 햇빛이 얼굴·몸 위에 비침) ============ */
+const LIGHT = { ...LIGHT_DEFAULT };
+try { Object.assign(LIGHT, JSON.parse(localStorage.getItem("curtainLight") || "{}")); } catch (e) {}
+const SLIDERS = [["alpha", "빛 투명도", 0, 0.6, 0.01], ["blur", "가장자리 흐림", 0, 24, 1], ["gold", "금빛 정도", 0, 0.4, 0.01],
+                 ["follow", "따라오는 속도", 0.01, 0.3, 0.01], ["move", "이동 거리", 0, 1, 0.01]];
+const panel = document.getElementById("panel");
+SLIDERS.forEach(([key, name, min, max, stepv]) => {
+  const lab = document.createElement("label"), val = document.createElement("span"), inp = document.createElement("input");
+  inp.type = "range"; inp.min = min; inp.max = max; inp.step = stepv; inp.value = LIGHT[key]; val.textContent = LIGHT[key];
+  inp.oninput = () => { LIGHT[key] = +inp.value; val.textContent = inp.value;
+    try { localStorage.setItem("curtainLight", JSON.stringify(LIGHT)); } catch (e) {} };
+  lab.append(name, val, inp); panel.append(lab);
+});
+document.getElementById("lightBtn").onclick = () => { panel.hidden = !panel.hidden; };
+
+const mk = () => document.createElement("canvas");
+const lc = mk(), ls = mk(), lf = mk();                      // 색 빛 / 그림자 / 얼굴용 빛 (작게 그려서 부드럽게)
+const LS = 0.4, canFilter = "filter" in ctx;
+let face = { x: 0, y: 0, r: 100, w: 0 }, faceT = null, faceOn = 0;
+
+function updateLight(now) {
+  const dx = Math.sin(now * 0.0003) * 6, dy = Math.cos(now * 0.00025) * 4;      // 햇빛의 아주 느린 흔들림
+  for (const pts of strings) for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    const tx = p.rx + (p.x - p.rx) * LIGHT.move + dx, ty = p.ry + (p.y - p.ry) * LIGHT.move + dy;
+    p.lx += (tx - p.lx) * LIGHT.follow; p.ly += (ty - p.ly) * LIGHT.follow;      // 줄보다 훨씬 느리게 따라옴
+    p.lsw += (p.sw * LIGHT.move - p.lsw) * LIGHT.follow;
+  }
+  if (faceT) {
+    if (face.w < 0.02) { face.x = faceT.x; face.y = faceT.y; }
+    face.x += (faceT.x - face.x) * 0.12; face.y += (faceT.y - face.y) * 0.12; face.r += (faceT.r - face.r) * 0.12;
+  }
+  face.w += (faceOn - face.w) * 0.06;
+}
+
+function lightShape(c, p) {
+  c.save(); c.translate(p.lx * LS, p.ly * LS); c.rotate(p.lsw); c.scale(LS * 1.04, LS * 1.04);
+  shapePath(c, p.type, p.w, p.h); c.restore();
+}
+
+function drawLight() {
+  const lw = Math.ceil(W * LS), lh = Math.ceil(H * LS);
+  for (const c of [lc, ls, lf]) if (c.width !== lw || c.height !== lh) { c.width = lw; c.height = lh; }
+  const cc = lc.getContext("2d"), sc = ls.getContext("2d"), fc = lf.getContext("2d");
+  cc.clearRect(0, 0, lw, lh);                                  // 색 빛: 조각 모양 그대로
+  for (const pts of strings) for (let i = 1; i < pts.length; i++) {
+    const p = pts[i]; lightShape(cc, p); cc.fillStyle = rgba(p.col, 0.95 * p.la); cc.fill();
+  }
+  sc.globalCompositeOperation = "source-over"; sc.clearRect(0, 0, lw, lh);   // 그림자: 전체를 덮고 조각만 뚫음
+  sc.fillStyle = `rgba(70,68,78,${LIGHT_SHADOW})`; sc.fillRect(0, 0, lw, lh);
+  sc.strokeStyle = `rgba(60,58,66,${LIGHT_SHADOW * 1.8})`; sc.lineWidth = 1.5;
+  sc.beginPath();
+  for (const pts of strings) { sc.moveTo(pts[0].rx * LS, -10); for (let i = 1; i < pts.length; i++) sc.lineTo(pts[i].lx * LS, pts[i].ly * LS); }
+  sc.stroke();
+  sc.globalCompositeOperation = "destination-out"; sc.fillStyle = "rgba(0,0,0,0.92)";
+  for (const pts of strings) for (let i = 1; i < pts.length; i++) { lightShape(sc, pts[i]); sc.fill(); }
+  sc.globalCompositeOperation = "source-over";
+  if (face.w > 0.02) {                                         // 얼굴 쪽 빛을 조금 더
+    fc.globalCompositeOperation = "source-over"; fc.clearRect(0, 0, lw, lh); fc.drawImage(lc, 0, 0);
+    const g = fc.createRadialGradient(face.x * LS, face.y * LS, 0, face.x * LS, face.y * LS, face.r * LS);
+    g.addColorStop(0, "rgba(0,0,0,1)"); g.addColorStop(1, "rgba(0,0,0,0)");
+    fc.globalCompositeOperation = "destination-in"; fc.fillStyle = g; fc.fillRect(0, 0, lw, lh);
+  }
+  ctx.save();
+  if (canFilter && LIGHT.blur > 0) ctx.filter = `blur(${LIGHT.blur}px)`;     // 가장자리만 살짝 흐리게
+  ctx.imageSmoothingEnabled = true;
+  ctx.globalCompositeOperation = "multiply"; ctx.drawImage(ls, 0, 0, W, H);   // 회색 그림자
+  ctx.globalCompositeOperation = "overlay"; ctx.globalAlpha = LIGHT.alpha; ctx.drawImage(lc, 0, 0, W, H);   // 색 빛
+  if (face.w > 0.02) { ctx.globalAlpha = LIGHT.alpha * 0.7 * face.w; ctx.drawImage(lf, 0, 0, W, H); }
+  ctx.restore();
+  if (LIGHT.gold > 0) {                                        // 따뜻한 저녁 햇빛 톤
+    ctx.save(); ctx.globalCompositeOperation = "soft-light";
+    ctx.fillStyle = `rgba(255,170,85,${Math.min(1, LIGHT.gold * 2)})`; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+}
+
 function draw() {
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, W, H);
   drawVideo();
+  drawLight();
   ctx.strokeStyle = THREAD_COLOR; ctx.lineWidth = 1;     // 실
   ctx.beginPath();
   for (const pts of strings) { ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); }
@@ -365,7 +462,7 @@ function playClick(v, size) {                          // 맑고 마른 딸깍
 
 /* ============ 손·얼굴 인식 (MediaPipe) ============ */
 const msg = document.getElementById("msg");
-let handLM = null, poseLM = null, lastVideoTime = -1;
+let handSm = new Map(), handLM = null, poseLM = null, lastVideoTime = -1;
 const HAND_POINTS = [0, 4, 8, 12, 16, 20, 5, 9, 13, 17];
 
 function toScreen(lm) {                                 // 영상 좌표(0~1) → 화면 px (거울 + cover)
@@ -420,15 +517,25 @@ function bodyFromPose(lm) {
 function track() {
   if (!handLM || !poseLM || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
-  const ts = performance.now(), list = [];
+  const ts = performance.now(), list = [], nextSm = new Map();
   const hands = handLM.detectForVideo(video, ts).landmarks || [];
   hands.forEach((lm, h) => {
     const a = toScreen(lm[0]), b = toScreen(lm[9]);
     const r = Math.max(30, Math.hypot(a.x - b.x, a.y - b.y) * HAND_RADIUS);
-    HAND_POINTS.forEach(i => { const p = toScreen(lm[i]); list.push({ id: "h" + h + "_" + i, x: p.x, y: p.y, radius: r }); });
+    HAND_POINTS.forEach(i => {
+      const p = toScreen(lm[i]), id = "h" + h + "_" + i, q = handSm.get(id);
+      let x = p.x, y = p.y;
+      if (q) { const al = Math.min(0.8, HAND_SMOOTH + Math.hypot(p.x - q.x, p.y - q.y) * 0.02); x = q.x + (p.x - q.x) * al; y = q.y + (p.y - q.y) * al; }
+      nextSm.set(id, { x, y }); list.push({ id, x, y, radius: r });
+    });
   });
+  handSm = nextSm;
   const poses = poseLM.detectForVideo(video, ts).landmarks || [];
   bodyShapes = poses.length ? bodyFromPose(poses[0]) : [];
+  if (poses.length) {
+    const a = toScreen(poses[0][7]), b = toScreen(poses[0][8]);
+    faceT = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: Math.max(70, Math.hypot(a.x - b.x, a.y - b.y) * 1.8) }; faceOn = 1;
+  } else faceOn = 0;
   trackedPushers = list; refreshPushers();
 }
 
@@ -444,7 +551,7 @@ document.getElementById("btnCam").onclick = async () => {
   }
 };
 
-function loop(now) { try { track(); } catch (e) { console.error(e); } step(now); updateAudio(now); draw(); requestAnimationFrame(loop); }
+function loop(now) { try { track(); } catch (e) { console.error(e); } step(now); updateLight(now); updateAudio(now); draw(); requestAnimationFrame(loop); }
 addEventListener("resize", build);
 build(); requestAnimationFrame(loop);
 </script>
