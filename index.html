@@ -50,7 +50,7 @@ const LENGTH_RANDOM  = 0;      // 줄마다 길이가 다른 정도 (0 = 모두 
 const FONT           = "serif";
 const TEXT_COLOR     = "#ffffff";
 const BG_COLOR       = "#0d0d10";
-const VIDEO_DIM      = 0.55;   // 카메라 영상 밝기 (0 = 안 보임, 1 = 원본)
+const VIDEO_DIM      = 0.8;    // 카메라 영상 밝기 (0 = 안 보임, 1 = 원본)
 
 // 움직임 느낌
 const GRAVITY    = 0.25;   // 늘어지는 힘
@@ -61,13 +61,13 @@ const PUSH_SWEEP = 0.4;    // 손·얼굴이 움직이는 속도가 줄에 전�
 
 // 소리
 const SOUND_ON     = true;
-const SOUND_VOLUME = 0.5;                       // 0 ~ 1
+const SOUND_VOLUME = 0.25;                      // 0 ~ 1
 const SCALE_HZ     = [262, 294, 330, 392, 440, 523, 587, 659, 784]; // 종소리 음계(도레미솔라...)
 
 // 밀어내는 위치
 const PUSH_RADIUS = 110;   // 마우스일 때 범위 반지름(px)
 const HAND_RADIUS = 0.55;  // 손 크기 대비 범위 (클수록 넓게 밀어냄)
-const BODY_SCALE  = 1.0;   // 몸 영역 크기 배율 (줄이 몸에서 더 떨어지길 원하면 1.2처럼 키우기)
+const BODY_SCALE  = 1.15;  // 몸 영역 크기 배율 (줄이 몸에서 더 떨어지길 원하면 1.2처럼 키우기)
 const BODY_MARGIN = 6;     // 몸 둘레 여유(px)
 const SHOW_BODY   = false; // true로 바꾸면 인식된 몸 영역(머리·어깨·팔)을 선으로 보여줘요
 
