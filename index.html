@@ -10,7 +10,7 @@
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   video { display: none; }
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
-           justify-content: center; gap: 14px; background: rgba(13,13,16,.55); text-align: center; padding: 24px; }
+           justify-content: center; gap: 14px; background: rgba(40,36,32,.5); text-align: center; padding: 24px; }
   #start h1 { font-size: 20px; font-weight: 500; margin: 0 0 6px; letter-spacing: .02em; }
   #start p { margin: 0; font-size: 14px; opacity: .75; line-height: 1.6; }
   #start button { font: inherit; font-size: 16px; color: #fff; background: transparent; cursor: pointer;
@@ -33,41 +33,39 @@
 <script>
 /* ============ 여기만 바꾸면 됩니다 ============ */
 
-// 줄에 들어갈 글자. 한 줄이 한 가닥에 쓰입니다. 줄 수보다 적으면 반복돼요.
-const TEXT_LINES = [
-  "길은 걷는 사람 앞에서만 열리고 바람은 지나간 자리에 소리를 남긴다",
-  "멀리 가려면 천천히 걷고 오래 보려면 가만히 서 있어야 한다",
-  "처음 만난 풍경은 오래된 기억처럼 낯설고도 다정하다",
-  "지붕 끝에 걸린 구름이 느리게 흘러 저녁이 된다",
-  "돌아오는 길에 비로소 떠나온 곳이 보인다",
-];
-
-const STRING_SPACING = 90;     // 줄 사이 간격(px) — 클수록 듬성듬성
-const FONT_SIZE      = 20;     // 글자 크기(px)
-const CHAR_SPACING   = 26;     // 글자 사이 세로 간격(px)
+const STRING_SPACING = 100;    // 줄 사이 간격(px) — 클수록 듬성듬성
 const LENGTH_RATIO   = 1.05;   // 줄 길이 (화면 높이의 몇 배, 1 이상이면 바닥까지)
-const LENGTH_RANDOM  = 0;      // 줄마다 길이가 다른 정도 (0 = 모두 바닥까지)
-const FONT           = "serif";
-const TEXT_COLOR     = "#ffffff";
-const BG_COLOR       = "#0d0d10";
+const BG_COLOR       = "#d8d1c6";
 const VIDEO_DIM      = 0.8;    // 카메라 영상 밝기 (0 = 안 보임, 1 = 원본)
 
-// 움직임 느낌
+// 조각 (큰 조각과 작은 조각이 번갈아 달려요)
+const PIECE_BIG    = [58, 98];   // 큰 조각 크기 범위(px)
+const PIECE_SMALL  = [24, 46];   // 작은 조각 크기 범위(px)
+const PIECE_GAP    = 8;          // 조각 사이 실이 보이는 길이(px)
+const PIECE_ALPHA  = 0.58;       // 투명도 (낮을수록 더 비쳐 보여요)
+const THREAD_COLOR = "rgba(110,104,98,0.55)";   // 실 색
+// 색 팔레트 [R, G, B] — 채도 낮은 청록·보라·올리브·살구·진주색
+const PALETTE = [
+  [111,163,160], [143,184,180], [166,139,181], [183,162,196], [163,165,111], [184,187,138],
+  [227,185,154], [220,165,138], [232,224,204], [159,176,181], [122,150,130],
+];
+
+// 움직임 느낌 (무거운 조각은 천천히, 가벼운 조각은 빠르게 흔들려요)
 const GRAVITY    = 0.25;   // 늘어지는 힘
 const RETURN     = 0.012;  // 제자리로 돌아오려는 힘 (클수록 빨리 복귀)
-const DAMPING    = 0.985;  // 1에 가까울수록 오래 출렁임
 const PUSH_POWER = 0.7;    // 밀어내는 세기
-const PUSH_SWEEP = 0.4;    // 손·얼굴이 움직이는 속도가 줄에 전달되는 정도
+const PUSH_SWEEP = 0.4;    // 손이 움직이는 속도가 조각에 전달되는 정도
 
 // 소리
 const SOUND_ON     = true;
 const SOUND_VOLUME = 0.25;                      // 0 ~ 1
 const SCALE_HZ     = [262, 294, 330, 392, 440, 523, 587, 659, 784]; // 종소리 음계(도레미솔라...)
+const CLICK_VOLUME = 1.0;                       // 조각 부딪히는 딸깍 소리 배율 (0이면 끔)
 
 // 밀어내는 위치
 const PUSH_RADIUS = 110;   // 마우스일 때 범위 반지름(px)
 const HAND_RADIUS = 0.55;  // 손 크기 대비 범위 (클수록 넓게 밀어냄)
-const BODY_SCALE  = 1.15;  // 몸 영역 크기 배율 (줄이 몸에서 더 떨어지길 원하면 1.2처럼 키우기)
+const BODY_SCALE  = 1.15;  // 몸 영역 크기 배율
 const BODY_MARGIN = 6;     // 몸 둘레 여유(px)
 const SHOW_BODY   = false; // true로 바꾸면 인식된 몸 영역(머리·어깨·팔)을 선으로 보여줘요
 
@@ -91,33 +89,76 @@ cv.addEventListener("pointerdown", e => { mousePusher = { id: "mouse", x: e.clie
 cv.addEventListener("pointerleave", () => { mousePusher = null; refreshPushers(); });
 cv.addEventListener("pointerup", e => { if (e.pointerType !== "mouse") { mousePusher = null; refreshPushers(); } });
 
-/* ============ 줄 커튼 엔진 (건드리지 않아도 돼요) ============ */
+/* ============ 조각 커튼 엔진 (건드리지 않아도 돼요) ============ */
 const ctx = cv.getContext("2d");
 const video = document.getElementById("cam");
-let W, H, strings = [], videoOn = false, energy = 0, hitX = 0.5;
-let bodyShapes = [];   // 몸 영역: 캡슐(두 점 + 굵기) 목록, 화면 px. 줄이 이 안으로 들어가지 못해요.
+const S = 2;   // 조각 그림을 2배 크기로 미리 그려 두어 선명하게
+let W, H, strings = [], videoOn = false, energy = 0, hitX = 0.5, NOW = 0, clickBudget = 0;
+let bodyShapes = [];   // 몸 영역: 캡슐(두 점 + 굵기) 목록, 화면 px. 조각이 이 안으로 들어가지 못해요.
 let bodyHit = 0;
 
-function collideBody(pts) {
-  for (let i = 1; i < pts.length; i++) {
-    const p = pts[i];
-    for (const c of bodyShapes) {
-      const abx = c.bx - c.ax, aby = c.by - c.ay;
-      let t = ((p.x - c.ax) * abx + (p.y - c.ay) * aby) / (abx * abx + aby * aby || 1);
-      t = Math.max(0, Math.min(1, t));
-      const qx = c.ax + abx * t, qy = c.ay + aby * t;
-      const dx = p.x - qx, dy = p.y - qy, d = Math.hypot(dx, dy), R = c.r + BODY_MARGIN;
-      if (d < R) {
-        const nx = d > 0.001 ? dx / d : 0, ny = d > 0.001 ? dy / d : -1;
-        const sx = nx * (R - d), sy = ny * (R - d);
-        p.x += sx; p.y += sy;
-        p.px += sx; p.py += sy;                    // 속도는 유지 → 몸 표면을 타고 미끄러져요
-        p.px += (p.x - p.px) * 0.25;               // 약간의 마찰
-        p.py += (p.y - p.py) * 0.25;
-        bodyHit += Math.min(Math.hypot(sx, sy), 6);
-      }
-    }
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const shade = (c, f) => c.map(v => Math.max(0, Math.min(255, Math.round(v * f))));
+
+// 조각 모양 경로 (0,0이 중심)
+function shapePath(c, type, w, h) {
+  c.beginPath();
+  if (type === "ring") {
+    c.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2); c.closePath();
+    c.moveTo(w * 0.23, 0); c.ellipse(0, 0, w * 0.23, h * 0.23, 0, 0, Math.PI * 2, true);
+  } else if (type === "square") {
+    const r = Math.min(w, h) * 0.28;
+    c.moveTo(-w / 2 + r, -h / 2);
+    c.arcTo(w / 2, -h / 2, w / 2, h / 2, r); c.arcTo(w / 2, h / 2, -w / 2, h / 2, r);
+    c.arcTo(-w / 2, h / 2, -w / 2, -h / 2, r); c.arcTo(-w / 2, -h / 2, w / 2, -h / 2, r); c.closePath();
+  } else c.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);   // disc, oval
+}
+
+// 조개 결 느낌의 반투명 조각 그림 한 장
+function makeSprite(type, w, h, col) {
+  const pad = 4, cw = Math.ceil((w + pad * 2) * S), ch = Math.ceil((h + pad * 2) * S);
+  const cvs = document.createElement("canvas"); cvs.width = cw; cvs.height = ch;
+  const c = cvs.getContext("2d");
+  c.scale(S, S); c.translate(cw / S / 2, ch / S / 2);
+  const size = Math.max(w, h);
+  c.save();
+  shapePath(c, type, w, h); c.clip();
+  c.fillStyle = rgba(col, PIECE_ALPHA); c.fillRect(-w, -h, w * 2, h * 2);               // 바탕색
+  const g = c.createRadialGradient(-w * 0.2, -h * 0.25, 0, -w * 0.2, -h * 0.25, size * 0.85);
+  g.addColorStop(0, "rgba(255,255,255,0.38)"); g.addColorStop(1, "rgba(255,255,255,0)");
+  c.fillStyle = g; c.fillRect(-w, -h, w * 2, h * 2);                                      // 진주빛 광택
+  for (let n = 0; n < 8; n++) {                                                           // 얼룩
+    const x = rnd(-w / 2, w / 2), y = rnd(-h / 2, h / 2), r = rnd(0.12, 0.36) * size;
+    const sg = c.createRadialGradient(x, y, 0, x, y, r);
+    sg.addColorStop(0, rgba(shade(col, Math.random() < 0.6 ? 0.55 : 1.25), rnd(0.12, 0.26))); sg.addColorStop(1, rgba(col, 0));
+    c.fillStyle = sg; c.fillRect(x - r, y - r, r * 2, r * 2);
   }
+  const ox = pick([-1, 1]) * w * 0.9, oy = pick([-1, 1]) * h * 0.9;                       // 조개 성장선
+  c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 0.8;
+  for (let r = size * 0.3; r < size * 2.2; r += size * 0.1 + Math.random() * 4) { c.beginPath(); c.arc(ox, oy, r, 0, Math.PI * 2); c.stroke(); }
+  c.strokeStyle = "rgba(255,255,255,0.22)"; c.lineWidth = 3; shapePath(c, type, w, h); c.stroke();  // 안쪽 테두리 빛
+  c.restore();
+  shapePath(c, type, w, h); c.strokeStyle = rgba(shade(col, 0.6), 0.5); c.lineWidth = 1; c.stroke();   // 바깥 테두리
+  const inset = Math.max(5, h * 0.13);                                                    // 실이 지나가는 작은 구멍 (위·아래)
+  for (const y of [-h / 2 + inset, h / 2 - inset]) {
+    c.save(); c.globalCompositeOperation = "destination-out"; c.beginPath(); c.arc(0, y, 2.1, 0, Math.PI * 2); c.fill(); c.restore();
+    c.strokeStyle = "rgba(70,65,60,0.55)"; c.lineWidth = 0.8; c.beginPath(); c.arc(0, y, 2.3, 0, Math.PI * 2); c.stroke();
+  }
+  return cvs;
+}
+
+function makePiece(big) {
+  const size = big ? rnd(...PIECE_BIG) : rnd(...PIECE_SMALL);
+  let type = pick(["disc", "oval", "ring", "square"]);
+  if (type === "ring" && size < 34) type = "disc";
+  let w = size, h = size;
+  if (type === "oval") { w = size * 0.62; h = size * 1.35; }
+  if (type === "square") { w = size * 0.92; h = size * 0.8; }
+  const m = Math.max(0.5, Math.min(2.8, (w * h) / 2400)), k = 1 / m;     // 클수록 무겁다
+  return { w, h, m, k, r: (w + h) / 4, ret: 0.5 + 0.5 * k, damp: 0.978 + 0.012 * (m / 2.8),
+           sw: 0, last: 0, sprite: makeSprite(type, w, h, pick(PALETTE)) };
 }
 
 function build() {
@@ -129,58 +170,109 @@ function build() {
   const count = Math.max(3, Math.floor(W / STRING_SPACING));
   const x0 = (W - (count - 1) * STRING_SPACING) / 2;
   for (let s = 0; s < count; s++) {
-    const text = [...TEXT_LINES[s % TEXT_LINES.length]];
-    const len = H * LENGTH_RATIO * (1 - Math.random() * LENGTH_RANDOM);
-    const n = Math.max(2, Math.floor(len / CHAR_SPACING));
     const x = x0 + s * STRING_SPACING;
-    const pts = [];
-    for (let i = 0; i < n; i++) {
-      const y = i * CHAR_SPACING - CHAR_SPACING;    // 맨 위는 화면 밖에 고정
-      pts.push({ x, y, px: x, py: y, rx: x, ry: y, ch: text[(i + s * 3) % text.length] });
+    const pts = [{ x, y: -10, px: x, py: -10, rx: x, ry: -10, m: 1 }];      // 0번은 화면 밖 고정점
+    let y = -10, prevH = 0;
+    for (let i = 1; y < H * LENGTH_RATIO; i++) {
+      const p = makePiece((i + s) % 2 === 0);
+      const len = i === 1 ? p.h / 2 + 20 : prevH / 2 + p.h / 2 + PIECE_GAP;
+      y += len; prevH = p.h;
+      Object.assign(p, { x, y, px: x, py: y, rx: x, ry: y, len });
+      pts.push(p);
     }
     strings.push(pts);
   }
 }
 
-function step() {
+function tick(p, v) {
+  if (NOW - p.last < 160 || clickBudget <= 0) return;
+  p.last = NOW; clickBudget--; playClick(v, Math.max(p.w, p.h));
+}
+
+function collideBody(pts) {
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    for (const c of bodyShapes) {
+      const abx = c.bx - c.ax, aby = c.by - c.ay;
+      let t = ((p.x - c.ax) * abx + (p.y - c.ay) * aby) / (abx * abx + aby * aby || 1);
+      t = Math.max(0, Math.min(1, t));
+      const qx = c.ax + abx * t, qy = c.ay + aby * t;
+      const dx = p.x - qx, dy = p.y - qy, d = Math.hypot(dx, dy), R = c.r + BODY_MARGIN + p.r * 0.7;
+      if (d < R) {
+        const nx = d > 0.001 ? dx / d : 0, ny = d > 0.001 ? dy / d : -1;
+        const sx = nx * (R - d), sy = ny * (R - d);
+        p.x += sx; p.y += sy;
+        p.px += sx; p.py += sy;                    // 속도는 유지 → 몸 표면을 타고 미끄러져요
+        p.px += (p.x - p.px) * 0.25;               // 약간의 마찰
+        p.py += (p.y - p.py) * 0.25;
+        const hit = Math.min(Math.hypot(sx, sy), 6);
+        bodyHit += hit;
+        if (hit > 1.5) tick(p, hit * 0.12);
+      }
+    }
+  }
+}
+
+function step(now) {
+  NOW = now; clickBudget = 3;
   let e = 0, ex = 0; bodyHit = 0;
   for (const pts of strings) {
     for (let i = 1; i < pts.length; i++) {
-      const p = pts[i];
-      let vx = (p.x - p.px) * DAMPING;
-      let vy = (p.y - p.py) * DAMPING;
+      const p = pts[i], k = p.k;
+      const sp0 = Math.hypot(p.x - p.px, p.y - p.py);
+      let vx = (p.x - p.px) * p.damp, vy = (p.y - p.py) * p.damp;
       vy += GRAVITY;
-      vx += (p.rx - p.x) * RETURN;
-      vy += (p.ry - p.y) * RETURN;
+      vx += (p.rx - p.x) * RETURN * p.ret;            // 가벼울수록 빨리 돌아와요
+      vy += (p.ry - p.y) * RETURN * p.ret;
       for (const m of pushers) {
-        const dx = p.x - m.x, dy = p.y - m.y;
-        const d = Math.hypot(dx, dy);
-        if (d < m.radius && d > 0.01) {
-          const f = Math.pow(1 - d / m.radius, 2);
-          const sp = Math.hypot(m.vx, m.vy);
-          vx += (dx / d) * f * PUSH_POWER * 10 + m.vx * f * PUSH_SWEEP;
-          vy += (dy / d) * f * PUSH_POWER * 3  + m.vy * f * PUSH_SWEEP * 0.3;
-          if (d < m.radius * 0.5) {                 // 몸이 줄을 통과하지 못하게 살짝 밀어냄
-            const k = (m.radius * 0.5 - d) * 0.25;
-            p.x += (dx / d) * k; p.y += (dy / d) * k * 0.3;
+        const R = m.radius + p.r * 0.5;
+        const dx = p.x - m.x, dy = p.y - m.y, d = Math.hypot(dx, dy);
+        if (d < R && d > 0.01) {
+          const f = Math.pow(1 - d / R, 2), sp = Math.hypot(m.vx, m.vy);
+          vx += ((dx / d) * f * PUSH_POWER * 10 + m.vx * f * PUSH_SWEEP) * k;     // 가벼울수록 많이 밀려요
+          vy += ((dy / d) * f * PUSH_POWER * 3  + m.vy * f * PUSH_SWEEP * 0.3) * k;
+          if (d < R * 0.5) {
+            const kk = (R * 0.5 - d) * 0.25;
+            p.x += (dx / d) * kk; p.y += (dy / d) * kk * 0.3;
           }
-          const w = f * sp * 0.12;            // 움직일 때만 소리 (가만히 있으면 무음)
+          const w = f * sp * 0.12;
           e += w; ex += w * m.x;
+          if (f > 0.25 && sp0 > 3.5) tick(p, sp0 * 0.08);                         // 손이 닿으면 딸깍
         }
       }
       p.px = p.x; p.py = p.y;
       p.x += vx;  p.y += vy;
+      p.sw += (Math.max(-0.6, Math.min(0.6, vx * 0.06 * k)) - p.sw) * 0.12 * p.ret;  // 조각이 살짝 기울며 흔들림
     }
     for (let it = 0; it < 10; it++) {
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i];
         const dx = b.x - a.x, dy = b.y - a.y;
         const d = Math.hypot(dx, dy) || 0.0001;
-        const diff = (d - CHAR_SPACING) / d;
-        if (i - 1 === 0) { b.x -= dx * diff; b.y -= dy * diff; }
-        else { a.x += dx * diff * 0.5; a.y += dy * diff * 0.5; b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5; }
+        const diff = (d - b.len) / d;
+        if (i === 1) { b.x -= dx * diff; b.y -= dy * diff; }
+        else {
+          const wa = 1 / a.m, wb = 1 / b.m, sum = wa + wb;          // 무거운 쪽이 덜 움직임
+          a.x += dx * diff * wa / sum; a.y += dy * diff * wa / sum;
+          b.x -= dx * diff * wb / sum; b.y -= dy * diff * wb / sum;
+        }
       }
       if (bodyShapes.length) collideBody(pts);
+    }
+  }
+  for (let s = 0; s < strings.length - 1; s++) {                    // 옆 줄 조각끼리 부딪힘
+    const A = strings[s], B = strings[s + 1];
+    for (let i = 1; i < A.length; i++) for (let j = 1; j < B.length; j++) {
+      const a = A[i], b = B[j];
+      if (Math.abs(a.y - b.y) > 80) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), min = (a.r + b.r) * 0.5;
+      if (d < min && d > 0.01) {
+        const ov = (min - d) / d, wa = 1 / a.m, wb = 1 / b.m, sum = wa + wb;
+        const rv = Math.hypot((a.x - a.px) - (b.x - b.px), (a.y - a.py) - (b.y - b.py));
+        a.x -= dx * ov * 0.2 * wa / sum; a.y -= dy * ov * 0.2 * wa / sum;
+        b.x += dx * ov * 0.2 * wb / sum; b.y += dy * ov * 0.2 * wb / sum;
+        if (rv > 2.2) { tick(a, rv * 0.08); tick(b, rv * 0.08); }
+      }
     }
   }
   e += bodyHit * 0.04;
@@ -203,23 +295,20 @@ function draw() {
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, W, H);
   drawVideo();
-  ctx.fillStyle = TEXT_COLOR;
-  ctx.font = FONT_SIZE + "px " + FONT;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 4;
-  for (const pts of strings) {
+  ctx.strokeStyle = THREAD_COLOR; ctx.lineWidth = 1;     // 실
+  ctx.beginPath();
+  for (const pts of strings) { ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); }
+  ctx.stroke();
+  for (const pts of strings) {                           // 조각
     for (let i = 1; i < pts.length; i++) {
-      const a = pts[i], b = pts[Math.min(i + 1, pts.length - 1)], c = pts[i - 1];
-      const ang = i === pts.length - 1 ? Math.atan2(a.y - c.y, a.x - c.x) : Math.atan2(b.y - a.y, b.x - a.x);
+      const p = pts[i], a = pts[i - 1], b = pts[Math.min(i + 1, pts.length - 1)];
+      const ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.PI / 2 + p.sw;
       ctx.save();
-      ctx.translate(a.x, a.y);
-      ctx.rotate(ang - Math.PI / 2);
-      ctx.fillText(a.ch, 0, 0);
+      ctx.translate(p.x, p.y); ctx.rotate(ang);
+      ctx.drawImage(p.sprite, -p.sprite.width / S / 2, -p.sprite.height / S / 2, p.sprite.width / S, p.sprite.height / S);
       ctx.restore();
     }
   }
-  ctx.shadowBlur = 0;
   if (SHOW_BODY) {
     ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineCap = "round";
     for (const c of bodyShapes) { ctx.lineWidth = c.r * 2; ctx.beginPath(); ctx.moveTo(c.ax, c.ay); ctx.lineTo(c.bx, c.by); ctx.stroke(); }
@@ -256,6 +345,22 @@ function updateAudio(now) {
     g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
     o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 1.7);
   }
+}
+
+function playClick(v, size) {                          // 맑고 마른 딸깍
+  if (!ac || CLICK_VOLUME <= 0) return;
+  const t = ac.currentTime, vol = Math.min(1, v) * SOUND_VOLUME * CLICK_VOLUME;
+  const f = Math.max(1400, Math.min(3400, 3600 - size * 18)) + Math.random() * 200;   // 작을수록 높은 소리
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = "triangle"; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.8, t + 0.05);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol * 0.5, t + 0.001); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 0.08);
+  const nb = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.03), ac.sampleRate), d = nb.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+  const ns = ac.createBufferSource(); ns.buffer = nb;
+  const bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = f * 1.5; bp.Q.value = 3;
+  const ng = ac.createGain(); ng.gain.value = vol * 0.8;
+  ns.connect(bp); bp.connect(ng); ng.connect(ac.destination); ns.start(t);
 }
 
 /* ============ 손·얼굴 인식 (MediaPipe) ============ */
@@ -339,7 +444,7 @@ document.getElementById("btnCam").onclick = async () => {
   }
 };
 
-function loop(now) { try { track(); } catch (e) { console.error(e); } step(); updateAudio(now); draw(); requestAnimationFrame(loop); }
+function loop(now) { try { track(); } catch (e) { console.error(e); } step(now); updateAudio(now); draw(); requestAnimationFrame(loop); }
 addEventListener("resize", build);
 build(); requestAnimationFrame(loop);
 </script>
