@@ -65,6 +65,7 @@ const LIGHT_DEFAULT = { alpha: 0.22,   // 빛 투명도 (0 ~ 0.6, 낮을수록 �
                         gold: 0.12,    // 따뜻한 금빛 정도
                         follow: 0.08,  // 빛이 줄을 따라오는 속도 (낮을수록 느리고 부드러움)
                         move: 0.8 };   // 그림자가 조각을 따라 움직이는 거리 (1 = 조각과 같게)
+const SHADOW_COUNT  = 7;           // 그림자를 만드는 조각 개수
 const SHADOW_OFFSET = [28, 48];   // 그림자가 조각에서 떨어지는 방향·거리(px)
 const HAND_SMOOTH  = 0.3;    // 손 떨림 줄이기 (낮을수록 부드럽지만 반응이 느려져요)
 
@@ -221,12 +222,12 @@ function build() {
     }
     strings.push(pts);
   }
-  casters = [];                                         // 그림자(색 빛)를 만드는 조각: 2~3개만
-  const picks = Math.min(3, strings.length);
-  for (let n = 0; n < picks; n++) {
-    const pts = strings[Math.floor((n + 0.5) * strings.length / picks)];
-    const cand = pts.filter((p, i) => i > 0 && p.ry > H * 0.2 && p.ry < H * 0.7 && p.m > 1.2);
-    casters.push(cand.length ? pick(cand) : pts[Math.min(3, pts.length - 1)]);
+  casters = [];                                         // 그림자(색 빛)를 만드는 조각
+  for (let n = 0; n < SHADOW_COUNT; n++) {
+    const pts = strings[n % strings.length];
+    const cand = pts.filter((p, i) => i > 0 && p.ry > H * 0.15 && p.ry < H * 0.8 && p.m > 1.2 && !casters.includes(p)
+      && casters.every(q => q.rx !== p.rx || Math.abs(q.ry - p.ry) > 90));
+    if (cand.length) casters.push(pick(cand));
   }
 }
 
