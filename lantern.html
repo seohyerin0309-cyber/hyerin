@@ -8,7 +8,7 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0907; color: #fff;
                font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
   #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover;
-         transform: scaleX(-1); filter: brightness(.5) saturate(.85) contrast(1.05); }
+         transform: scaleX(-1); filter: brightness(.4) saturate(.8) contrast(1.05); }
   #light { position: fixed; inset: 0; mix-blend-mode: screen; pointer-events: none; }
   #light .layer { position: absolute; inset: 0; }
   #vignette { position: fixed; inset: 0; pointer-events: none;
@@ -52,17 +52,25 @@ const video = $('#cam'), glCanvas = $('#gl'), hud = $('#hud'), hctx = hud.getCon
 const hint = $('#hint'), lightEl = $('#light'), dots = [...document.querySelectorAll('#dots i')];
 
 /* ---------------- light stages (이미지 1~4의 빛) ---------------- */
+/* 거리에 따라 부드럽게 줄어드는 빛 웅덩이 (역제곱 느낌) */
+function pool(x, y, rgb, a, R) {
+  const stops = [0, .06, .14, .26, .42, .62, .82, 1].map(t => {
+    const al = a * Math.exp(-3.4 * t) * (1 - t * t * t);
+    return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${al.toFixed(3)}) ${(t * 100).toFixed(0)}%`;
+  });
+  return `radial-gradient(circle ${R.toFixed(0)}px at ${x.toFixed(0)}px ${y.toFixed(0)}px, ${stops.join(',')})`;
+}
 const STAGES = [
-  { name: '주황 펜던트', fabric: 0xffb070, halo: 0xff9a4a,
-    bg: (x, y) => `radial-gradient(ellipse 75% 85% at ${x}px ${y}px, rgba(255,150,60,.55), rgba(255,110,40,.26) 45%, rgba(120,50,20,.14) 100%)` },
-  { name: '핑크 종이등', fabric: 0xffa4ae, halo: 0xff8099,
-    bg: (x, y) => `radial-gradient(ellipse 85% 95% at ${x}px ${y}px, rgba(255,150,175,.6), rgba(255,120,150,.3) 50%, rgba(150,60,90,.18) 100%)` },
-  { name: '노을 침실', fabric: 0xffbc88, halo: 0xffc23c,
-    bg: (x, y) => `radial-gradient(circle 55vmax at 82% 58%, rgba(255,215,40,.6), rgba(255,170,40,.2) 55%, transparent 75%),
-                   radial-gradient(ellipse 80% 90% at ${x}px ${y}px, rgba(255,150,130,.5), rgba(220,110,100,.24) 60%, rgba(120,60,50,.14) 100%)` },
-  { name: '보라 라운지', fabric: 0xe6a2ff, halo: 0xc062ff,
-    bg: (x, y) => `radial-gradient(ellipse 60% 22% at 50% 78%, rgba(255,190,90,.38), transparent 70%),
-                   radial-gradient(ellipse 85% 95% at ${x}px ${y}px, rgba(255,120,230,.55), rgba(190,80,230,.3) 50%, rgba(90,30,120,.25) 100%)` },
+  { name: '주황 펜던트', edge: 0xe8873a, core: 0xffd9a0, halo: 0xff9a4a,
+    bg: (x, y) => [pool(x, y, [255, 205, 140], .5, SH * .45), pool(x, y, [255, 150, 70], .5, SH * 1.05), pool(x, y, [200, 90, 40], .22, SW * 1.1)].join(',') },
+  { name: '핑크 종이등', edge: 0xf0788a, core: 0xffcdc4, halo: 0xff8099,
+    bg: (x, y) => [pool(x, y, [255, 200, 205], .45, SH * .4), pool(x, y, [255, 130, 160], .52, SH * 1.1), pool(x, y, [190, 70, 110], .24, SW * 1.1)].join(',') },
+  { name: '노을 침실', edge: 0xf59058, core: 0xffdba0, halo: 0xffc23c,
+    bg: (x, y) => [pool(SW * .8, SH * .6, [255, 205, 50], .55, SW * .62), pool(x, y, [255, 190, 150], .4, SH * .42),
+                   pool(x, y, [255, 140, 120], .42, SH * 1.1), pool(x, y, [200, 90, 80], .2, SW * 1.1)].join(',') },
+  { name: '보라 라운지', edge: 0xb060d8, core: 0xffc6ef, halo: 0xc062ff,
+    bg: (x, y) => [pool(SW * .5, SH * .95, [255, 175, 90], .4, SW * .5), pool(x, y, [255, 190, 240], .42, SH * .42),
+                   pool(x, y, [235, 110, 235], .5, SH * 1.1), pool(x, y, [120, 50, 160], .26, SW * 1.1)].join(',') },
 ];
 let stage = 0;
 
@@ -104,8 +112,7 @@ const weave = weaveTexture();
 function glowTexture(inner = 0.0) {
   const c = document.createElement('canvas'); c.width = c.height = 256;
   const g = c.getContext('2d'), r = g.createRadialGradient(128, 128, inner * 128, 128, 128, 128);
-  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(.25, 'rgba(255,255,255,.55)');
-  r.addColorStop(.6, 'rgba(255,255,255,.14)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  for (let k = 0; k <= 10; k++) { const t = k / 10; r.addColorStop(t, `rgba(255,255,255,${(Math.exp(-4.5 * t * t) * (1 - t * t * t)).toFixed(3)})`); }
   g.fillStyle = r; g.fillRect(0, 0, 256, 256);
   return new THREE.CanvasTexture(c);
 }
@@ -117,7 +124,8 @@ function surfacePoint(t, ph, W, H, out) {
   const st = Math.sin(t), ct = Math.cos(t);
   const s = Math.abs(Math.sin(N_RIB / 2 * ph));                    // 리브 위에서 0
   const pinch = 1 - 0.13 * (1 - Math.pow(s, 0.6)) * Math.pow(st, 0.7);
-  const r = (W / 2) * Math.pow(st, 0.72) * pinch;
+  const irregular = 1 + 0.02 * Math.sin(3 * ph + 1.3) + 0.012 * Math.sin(5 * ph + 0.4) + 0.01 * Math.sin(7 * ph + 2.1);
+  const r = (W / 2) * Math.pow(st, 0.72) * pinch * irregular;
   let y = (H / 2) * Math.sign(ct) * Math.pow(Math.abs(ct), 0.85);
   y += Math.sign(ct) * H * (0.035 * Math.cos(N_RIB * ph) * Math.pow(st, 3) - 0.04 * (1 - st));
   out[0] = r * Math.cos(ph); out[1] = y; out[2] = r * Math.sin(ph);
@@ -125,15 +133,14 @@ function surfacePoint(t, ph, W, H, out) {
 }
 function lanternGeometry(W, H) {
   const nu = N_RIB * 8, nv = 56, p = [0, 0, 0];
-  const pos = [], uv = [], col = [], idx = [];
+  const pos = [], uv = [], aS = [], idx = [];
   for (let j = 0; j <= nv; j++) {
-    const t = j / nv * Math.PI, ct = Math.abs(Math.cos(t));
+    const t = j / nv * Math.PI;
     for (let i = 0; i <= nu; i++) {
       const ph = i / nu * Math.PI * 2;
       const s = surfacePoint(t, ph, W, H, p);
       pos.push(p[0], p[1], p[2]); uv.push(i / nu, j / nv);
-      const b = Math.min(1, 0.8 + 0.2 * Math.pow(s, 0.8) + 0.25 * Math.pow(ct, 8));   // 리브 근처는 살짝 진하게, 극점은 밝게
-      col.push(b, b * (0.88 + 0.12 * s), b * (0.78 + 0.22 * s));
+      aS.push(s);
     }
   }
   for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
@@ -143,16 +150,40 @@ function lanternGeometry(W, H) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(idx);
+  g.setAttribute('aS', new THREE.Float32BufferAttribute(aS, 1));
+  g.setIndex(idx); g.computeVertexNormals();
   return g;
 }
 
-const ribMat = new THREE.MeshStandardMaterial({ color: 0x4a3a35, roughness: .6, metalness: .3 });
+const edgeCol = new THREE.Color(STAGES[0].edge), coreCol = new THREE.Color(STAGES[0].core), haloCol = new THREE.Color(STAGES[0].halo);
+const ribMat = new THREE.MeshBasicMaterial({ color: 0x6b4a3a });
 const capMat = new THREE.MeshStandardMaterial({ color: 0xc9a36a, roughness: .35, metalness: .8 });
 const ropeMat = new THREE.MeshBasicMaterial({ color: 0xf2e6d4 });
-const fabricCol = new THREE.Color(STAGES[0].fabric), haloCol = new THREE.Color(STAGES[0].halo);
-const fabricMat = new THREE.MeshBasicMaterial({ map: weave, vertexColors: true, color: fabricCol, side: THREE.DoubleSide });
+const FABRIC_VS = `
+  attribute float aS; varying vec2 vUv; varying vec3 vPos; varying vec3 vN; varying vec3 vV; varying float vS;
+  void main() { vUv = uv; vPos = position; vS = aS; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vN = normalize(normalMatrix * normal); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }`;
+const FABRIC_FS = `
+  uniform sampler2D map; uniform vec3 uEdge; uniform vec3 uCore; uniform vec2 uHalf; uniform float uFlick;
+  varying vec2 vUv; varying vec3 vPos; varying vec3 vN; varying vec3 vV; varying float vS;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y); }
+  void main() {
+    vec3 n = normalize(vN), v = normalize(vV);
+    float f = abs(dot(n, v));                                   // 정면일수록 전구 빛이 천 한 겹만 통과
+    float glow = pow(f, 2.2) + 0.35 * pow(abs(vPos.y / uHalf.y), 5.0) * f;
+    glow = clamp(glow, 0.0, 1.0);
+    vec3 tex = texture2D(map, vUv * vec2(14.0, 5.0)).rgb;
+    float folds = vn(vec2(vUv.x * 60.0, vUv.y * 6.0)) * 0.5 + vn(vec2(vUv.x * 150.0, vUv.y * 14.0)) * 0.25;
+    float panel = mix(0.6, 1.0, smoothstep(0.0, 0.35, vS)) * mix(0.9, 1.0, vS);   // 리브 근처 솔기는 어둡게, 패널 가운데는 볼록하게 밝게
+    vec3 col = mix(uEdge, uCore, glow);
+    col *= panel * (0.86 + 0.2 * folds) * (0.88 + 0.12 * tex) * uFlick;
+    col += uEdge * pow(1.0 - f, 3.0) * 0.12;
+    gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
+  }`;
+const fabricUniforms = { map: { value: weave }, uEdge: { value: edgeCol }, uCore: { value: coreCol }, uFlick: { value: 1 } };
 
 // 이미지 1처럼 세로로 매달린 3개 (중심 y, 폭, 높이, x오프셋)
 const DEFS = [
@@ -164,13 +195,14 @@ const PIVOT_Y = HALF_H + 1.2;
 const lanterns = DEFS.map((d, i) => {
   const pivot = new THREE.Group(); scene.add(pivot);
   const body = new THREE.Group(); body.position.y = d.cy - PIVOT_Y; pivot.add(body);
+  const fabricMat = new THREE.ShaderMaterial({ vertexShader: FABRIC_VS, fragmentShader: FABRIC_FS, side: THREE.DoubleSide, uniforms: { ...fabricUniforms, uHalf: { value: new THREE.Vector2(d.W / 2, d.H / 2) } } });
   body.add(new THREE.Mesh(lanternGeometry(d.W, d.H), fabricMat));
 
   const p = [0, 0, 0];
   for (let k = 0; k < N_RIB; k++) {                           // 가는 금속 리브
     const ph = k / N_RIB * Math.PI * 2, pts = [];
     for (let j = 1; j < 40; j++) { surfacePoint(j / 40 * Math.PI, ph, d.W, d.H, p); pts.push(new THREE.Vector3(p[0] * 1.004, p[1], p[2] * 1.004)); }
-    body.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.011 * d.W / 2.4, 5), ribMat));
+    body.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.0065 * d.W / 2.4, 5), ribMat));
   }
   for (const sgn of [1, -1]) {                                // 위·아래 금속 캡
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(d.W * 0.05, d.W * 0.065, d.H * 0.07, 20), capMat);
@@ -180,10 +212,10 @@ const lanterns = DEFS.map((d, i) => {
   const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, ropeLen, 6), ropeMat);
   rope.position.y = d.cy + d.H / 2 - PIVOT_Y + ropeLen / 2; pivot.add(rope);
 
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color: haloCol, blending: THREE.AdditiveBlending, transparent: true, opacity: .6, depthWrite: false }));
-  halo.scale.set(d.W * 2.3, d.W * 2.0, 1); halo.position.set(0, 0, -0.8); body.add(halo);
-  const bulb = new THREE.Sprite(new THREE.SpriteMaterial({ map: bulbTex, color: 0xfff0c8, blending: THREE.AdditiveBlending, transparent: true, opacity: .85, depthTest: false, depthWrite: false }));
-  bulb.scale.set(d.W * 0.5, d.W * 0.5, 1); bulb.position.set(0, 0, 0.2); body.add(bulb);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color: haloCol, blending: THREE.AdditiveBlending, transparent: true, opacity: .55, depthWrite: false }));
+  halo.scale.set(d.W * 2.6, d.W * 2.2, 1); halo.position.set(0, 0, -0.8); body.add(halo);
+  const bulb = new THREE.Sprite(new THREE.SpriteMaterial({ map: bulbTex, color: 0xfff0c8, blending: THREE.AdditiveBlending, transparent: true, opacity: .4, depthTest: false, depthWrite: false }));
+  bulb.scale.set(d.W * 0.42, d.W * 0.42, 1); bulb.position.set(0, 0, 0.2); body.add(bulb);
 
   return { pivot, d, halo, bulb, ang: 0, vel: 0, phase: i * 1.7 };
 });
@@ -353,14 +385,15 @@ function frame(now) {
 
   // 색 전환 + 흔들림
   const target = STAGES[stage], k = 1 - Math.exp(-dt * 2.2);
-  fabricCol.lerp(new THREE.Color(target.fabric), k); haloCol.lerp(new THREE.Color(target.halo), k);
-  fabricMat.color.copy(fabricCol);
+  edgeCol.lerp(new THREE.Color(target.edge), k); coreCol.lerp(new THREE.Color(target.core), k); haloCol.lerp(new THREE.Color(target.halo), k);
+  ribMat.color.copy(edgeCol).multiplyScalar(0.42);
+  fabricUniforms.uFlick.value = 1 + Math.sin(time * 2.3) * 0.012 + Math.sin(time * 5.1) * 0.008;
   lanterns.forEach((l) => {
     const flick = 1 + Math.sin(time * 3 + l.phase) * 0.015;
     l.vel += (-l.ang * 14 - l.vel * 1.4) * dt; l.ang += l.vel * dt;
     l.pivot.rotation.z = l.ang * 0.35 + Math.sin(time * 0.7 + l.phase) * 0.012;
-    l.halo.material.color.copy(haloCol); l.halo.material.opacity = 0.5 * flick;
-    l.bulb.material.color.copy(haloCol).lerp(new THREE.Color(0xfff0c8), 0.7);
+    l.halo.material.color.copy(haloCol); l.halo.material.opacity = 0.42 * flick;
+    l.bulb.material.color.copy(coreCol);
   });
   renderer.render(scene, camera);
 
