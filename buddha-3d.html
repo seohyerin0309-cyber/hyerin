@@ -1,0 +1,423 @@
+<title>분홍 부처상 3D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap">
+<style>
+  /* Layout: full-screen viewer, title top-left, controls bottom-center */
+  :root {
+    --bg: #efe8ea;
+    --bg2: #f8f4f5;
+    --fg: #3d2a31;
+    --muted: #7d6a71;
+    --chip: rgba(255, 255, 255, 0.72);
+    --chip-line: rgba(61, 42, 49, 0.14);
+    --accent: #b9808f;
+    --display: "Gowun Batang", "Noto Serif KR", serif;
+    --body: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1417; --bg2: #2b2024; --fg: #f1e4e8; --muted: #b59ca5;
+      --chip: rgba(43, 32, 36, 0.78); --chip-line: rgba(241, 228, 232, 0.16);
+      --accent: #d29aaa; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1417; --bg2: #2b2024; --fg: #f1e4e8; --muted: #b59ca5;
+    --chip: rgba(43, 32, 36, 0.78); --chip-line: rgba(241, 228, 232, 0.16);
+    --accent: #d29aaa; color-scheme: dark;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(ellipse at 50% 38%, var(--bg2), var(--bg) 70%);
+    color: var(--fg);
+    font-family: var(--body);
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; touch-action: none; cursor: grab; }
+  #stage:active { cursor: grabbing; }
+  #stage canvas { display: block; width: 100%; height: 100%; }
+  header {
+    position: fixed; left: 0; top: 0;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 18px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    pointer-events: none;
+  }
+  h1 { margin: 0; font: 700 22px/1.2 var(--display); letter-spacing: 0.01em; text-wrap: balance; }
+  header p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    pointer-events: none;
+  }
+  #hint { font-size: 13px; color: var(--muted); transition: opacity 0.6s; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; pointer-events: auto; }
+  button {
+    font: 500 14px/1 var(--body); color: var(--fg);
+    background: var(--chip); border: 1px solid var(--chip-line);
+    padding: 11px 16px; border-radius: 999px; cursor: pointer;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button[aria-pressed="true"] { border-color: var(--accent); }
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font: 400 16px var(--display); color: var(--muted); pointer-events: none; transition: opacity 0.5s;
+  }
+</style>
+
+<div id="stage" aria-label="분홍 부처상 3D 모델. 드래그해서 돌려볼 수 있습니다."></div>
+<header>
+  <h1>분홍 부처상</h1>
+  <p>유광 도자기 질감 · 360° 회전</p>
+</header>
+<div id="loading">모델을 빚는 중…</div>
+<footer>
+  <div id="hint">손가락이나 마우스로 끌어서 돌려보세요</div>
+  <div class="row">
+    <button id="auto" type="button" aria-pressed="true">자동 회전</button>
+    <button id="reset" type="button">정면 보기</button>
+    <button id="back" type="button">뒷모습</button>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function () {
+  // ---------- 색 ----------
+  const lin = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+  const GLAZE = lin(0xb98a98);      // 빛 받는 면의 분홍
+  const GLAZE_SHADE = lin(0x86596c); // 주름 안쪽에 고이는 진한 유약색
+  const LINE = lin(0x7e4a5e);       // 눈·입 선
+
+  // ---------- SDF 조각 ----------
+  const prims = [];
+  const E = (cx, cy, cz, rx, ry, rz, k = 0.06, op = 0) =>
+    prims.push({ t: 0, cx, cy, cz, rx, ry, rz, m: Math.min(rx, ry, rz), k, op });
+  const C = (ax, ay, az, bx, by, bz, ra, rb, k = 0.04, op = 0) =>
+    prims.push({ t: 1, ax, ay, az, bx, by, bz, ra, rb, k, op,
+      dx: bx - ax, dy: by - ay, dz: bz - az, l2: (bx - ax) ** 2 + (by - ay) ** 2 + (bz - az) ** 2 });
+  const chain = (pts, r, k) => { for (let i = 0; i < pts.length - 1; i++) C(...pts[i], ...pts[i + 1], r, r, k); };
+
+  // 가부좌 다리와 무릎
+  E(0, 0.2, 0.0, 0.6, 0.2, 0.5, 0.1);
+  E(-0.38, 0.19, 0.28, 0.3, 0.18, 0.3, 0.1);
+  E(0.38, 0.19, 0.28, 0.3, 0.18, 0.3, 0.1);
+  E(0, 0.35, 0.12, 0.5, 0.18, 0.38, 0.1);
+  // 몸통
+  E(0, 0.62, 0.0, 0.4, 0.28, 0.3, 0.1);
+  E(0, 0.88, -0.02, 0.42, 0.48, 0.3, 0.1);
+  E(-0.38, 1.1, 0.0, 0.2, 0.2, 0.19, 0.08);
+  E(0.38, 1.1, 0.0, 0.2, 0.2, 0.19, 0.08);
+  C(0, 1.2, 0, 0, 1.34, 0.01, 0.1, 0.1, 0.06);
+  // 머리, 육계, 귀
+  E(0, 1.57, 0.02, 0.235, 0.255, 0.245, 0.06);
+  E(0, 1.79, 0.0, 0.115, 0.11, 0.115, 0.08);
+  E(-0.238, 1.47, 0.0, 0.03, 0.1, 0.055, 0.02);
+  E(0.238, 1.47, 0.0, 0.03, 0.1, 0.055, 0.02);
+  // 코
+  C(0, 1.54, 0.25, 0, 1.47, 0.272, 0.02, 0.028, 0.03);
+  E(0, 1.45, 0.278, 0.032, 0.026, 0.03, 0.03);
+  // 들어 올린 팔 (보는 쪽 왼편)
+  E(-0.47, 0.92, 0.08, 0.16, 0.3, 0.16, 0.1);
+  C(-0.4, 1.1, 0.0, -0.47, 0.76, 0.12, 0.13, 0.12, 0.06);
+  C(-0.47, 0.76, 0.12, -0.14, 0.86, 0.36, 0.115, 0.08, 0.05);
+  E(-0.1, 1.0, 0.38, 0.08, 0.11, 0.022, 0.03);
+  C(-0.165, 1.06, 0.38, -0.175, 1.16, 0.38, 0.02, 0.017, 0.02);
+  C(-0.13, 1.08, 0.38, -0.135, 1.2, 0.38, 0.02, 0.017, 0.02);
+  C(-0.095, 1.08, 0.38, -0.095, 1.19, 0.38, 0.02, 0.017, 0.02);
+  C(-0.06, 1.05, 0.38, -0.052, 1.14, 0.38, 0.019, 0.015, 0.02);
+  C(-0.15, 0.94, 0.4, -0.2, 1.0, 0.41, 0.022, 0.018, 0.02);
+  // 무릎 위에 놓은 팔
+  C(0.4, 1.1, 0.0, 0.52, 0.6, 0.03, 0.13, 0.115, 0.06);
+  C(0.52, 0.6, 0.03, 0.32, 0.48, 0.32, 0.115, 0.075, 0.05);
+  E(0.14, 0.45, 0.4, 0.17, 0.03, 0.1, 0.03);
+  C(0.0, 0.445, 0.46, -0.13, 0.43, 0.49, 0.026, 0.02, 0.02);
+  C(0.02, 0.45, 0.43, -0.16, 0.43, 0.44, 0.026, 0.02, 0.02);
+  C(0.04, 0.45, 0.4, -0.12, 0.43, 0.39, 0.025, 0.019, 0.02);
+  C(0.06, 0.455, 0.36, -0.07, 0.435, 0.34, 0.023, 0.018, 0.02);
+  // 가사 주름
+  chain([[-0.2, 1.05, 0.27], [0.05, 0.85, 0.31], [0.3, 0.65, 0.3], [0.5, 0.5, 0.2]], 0.055, 0.04);
+  chain([[-0.26, 0.98, 0.25], [0.0, 0.76, 0.3], [0.26, 0.56, 0.3]], 0.04, 0.04);
+  chain([[0.2, 1.22, 0.1], [0.45, 1.0, 0.15], [0.55, 0.75, 0.12]], 0.05, 0.04);
+  chain([[-0.55, 0.3, 0.35], [-0.3, 0.2, 0.5], [0.0, 0.17, 0.52], [0.3, 0.2, 0.5], [0.55, 0.3, 0.35]], 0.07, 0.05);
+  chain([[-0.5, 0.42, 0.3], [-0.3, 0.33, 0.45], [-0.12, 0.3, 0.5]], 0.05, 0.04);
+  chain([[0.3, 0.4, 0.42], [0.45, 0.35, 0.4]], 0.045, 0.04);
+  for (const x of [-0.42, -0.28, -0.14, 0.1, 0.24, 0.38]) C(x, 0.4, 0.4, x * 1.12, 0.2, 0.52, 0.034, 0.032, 0.04);
+  chain([[-0.6, 0.2, 0.1], [-0.55, 0.15, 0.3], [-0.45, 0.12, 0.4]], 0.05, 0.04);
+  chain([[0.6, 0.2, 0.1], [0.55, 0.15, 0.3], [0.45, 0.12, 0.4]], 0.05, 0.04);
+
+  function smin(a, b, k) { if (k <= 0) return Math.min(a, b); const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; }
+  function smax(a, b, k) { return -smin(-a, -b, k); }
+  function sdf(x, y, z) {
+    let d = 1e9;
+    for (let i = 0; i < prims.length; i++) {
+      const p = prims[i]; let pd;
+      if (p.t === 0) {
+        const qx = (x - p.cx) / p.rx, qy = (y - p.cy) / p.ry, qz = (z - p.cz) / p.rz;
+        pd = (Math.sqrt(qx * qx + qy * qy + qz * qz) - 1) * p.m;
+      } else {
+        const px = x - p.ax, py = y - p.ay, pz = z - p.az;
+        let h = (px * p.dx + py * p.dy + pz * p.dz) / p.l2; h = h < 0 ? 0 : h > 1 ? 1 : h;
+        const ex = px - p.dx * h, ey = py - p.dy * h, ez = pz - p.dz * h;
+        pd = Math.sqrt(ex * ex + ey * ey + ez * ez) - (p.ra + (p.rb - p.ra) * h);
+      }
+      d = p.op === 0 ? smin(d, pd, p.k) : smax(d, -pd, p.k);
+    }
+    return smax(d, 0.02 - y, 0.03); // 평평한 밑면
+  }
+  function grad(x, y, z, e = 0.004) {
+    const gx = sdf(x + e, y, z) - sdf(x - e, y, z), gy = sdf(x, y + e, z) - sdf(x, y - e, z), gz = sdf(x, y, z + e) - sdf(x, y, z - e);
+    const l = Math.hypot(gx, gy, gz) || 1; return [gx / l, gy / l, gz / l];
+  }
+
+  // ---------- 서피스 넷으로 메시 만들기 ----------
+  function buildBody() {
+    const H = 0.0135, X0 = -0.78, Y0 = -0.03, Z0 = -0.55;
+    const nx = Math.ceil(1.56 / H) + 1, ny = Math.ceil(1.98 / H) + 1, nz = Math.ceil(1.26 / H) + 1;
+    const S = 8, cx = Math.ceil(nx / S) + 1, cy = Math.ceil(ny / S) + 1, cz = Math.ceil(nz / S) + 1;
+    const coarse = new Float32Array(cx * cy * cz);
+    for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) for (let i = 0; i < cx; i++)
+      coarse[i + cx * (j + cy * k)] = sdf(X0 + i * S * H, Y0 + j * S * H, Z0 + k * S * H);
+    const f = new Float32Array(nx * ny * nz);
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const c = coarse[Math.round(i / S) + cx * (Math.round(j / S) + cy * Math.round(k / S))];
+      f[i + nx * (j + ny * k)] = Math.abs(c) > 0.3 ? c : sdf(X0 + i * H, Y0 + j * H, Z0 + k * H);
+    }
+    const cellIdx = new Int32Array(nx * ny * nz).fill(-1);
+    const pos = [];
+    const cellsDX = [0, 1, 0, 1, 0, 1, 0, 1], cellsDY = [0, 0, 1, 1, 0, 0, 1, 1], cellsDZ = [0, 0, 0, 0, 1, 1, 1, 1];
+    const edges = [];
+    for (let c = 0; c < 8; c++) for (const b of [1, 2, 4]) if (!(c & b)) edges.push([c, c | b]);
+    const v = new Float32Array(8);
+    for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      let neg = 0;
+      for (let c = 0; c < 8; c++) { v[c] = f[(i + cellsDX[c]) + nx * ((j + cellsDY[c]) + ny * (k + cellsDZ[c]))]; if (v[c] < 0) neg++; }
+      if (neg === 0 || neg === 8) continue;
+      let sx = 0, sy = 0, sz = 0, n = 0;
+      for (const [a, b] of edges) {
+        if ((v[a] < 0) === (v[b] < 0)) continue;
+        const t = v[a] / (v[a] - v[b]);
+        sx += cellsDX[a] + t * (cellsDX[b] - cellsDX[a]); sy += cellsDY[a] + t * (cellsDY[b] - cellsDY[a]); sz += cellsDZ[a] + t * (cellsDZ[b] - cellsDZ[a]); n++;
+      }
+      let px = X0 + (i + sx / n) * H, py = Y0 + (j + sy / n) * H, pz = Z0 + (k + sz / n) * H;
+      const d = sdf(px, py, pz), g = grad(px, py, pz); // 표면으로 한 번 더 끌어당김
+      px -= g[0] * d; py -= g[1] * d; pz -= g[2] * d;
+      cellIdx[i + nx * (j + ny * k)] = pos.length / 3;
+      pos.push(px, py, pz);
+    }
+    const idx = [];
+    const at = (i, j, k) => cellIdx[i + nx * (j + ny * k)];
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const f0 = f[i + nx * (j + ny * k)];
+      for (let a = 0; a < 3; a++) {
+        const ii = i + (a === 0), jj = j + (a === 1), kk = k + (a === 2);
+        if (ii >= nx || jj >= ny || kk >= nz) continue;
+        const f1 = f[ii + nx * (jj + ny * kk)];
+        if ((f0 < 0) === (f1 < 0)) continue;
+        let q;
+        if (a === 0) { if (j < 1 || k < 1 || i >= nx - 1 || j >= ny - 1 || k >= nz - 1) continue; q = [at(i, j - 1, k - 1), at(i, j, k - 1), at(i, j, k), at(i, j - 1, k)]; }
+        else if (a === 1) { if (i < 1 || k < 1 || i >= nx - 1 || j >= ny - 1 || k >= nz - 1) continue; q = [at(i - 1, j, k - 1), at(i, j, k - 1), at(i, j, k), at(i - 1, j, k)]; }
+        else { if (i < 1 || j < 1 || i >= nx - 1 || j >= ny - 1 || k >= nz - 1) continue; q = [at(i - 1, j - 1, k), at(i, j - 1, k), at(i, j, k), at(i - 1, j, k)]; }
+        if (q.some((c) => c < 0)) continue;
+        const A = q[0] * 3, B = q[1] * 3, Cc = q[2] * 3;
+        const ux = pos[B] - pos[A], uy = pos[B + 1] - pos[A + 1], uz = pos[B + 2] - pos[A + 2];
+        const wx = pos[Cc] - pos[A], wy = pos[Cc + 1] - pos[A + 1], wz = pos[Cc + 2] - pos[A + 2];
+        const nrm = [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx][a];
+        const out = f0 < 0 ? 1 : -1;
+        if (nrm * out < 0) q.reverse();
+        idx.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+      }
+    }
+    // 법선과 주름 음영(AO)
+    const nv = pos.length / 3, normals = new Float32Array(nv * 3), colors = new Float32Array(nv * 3);
+    for (let i = 0; i < nv; i++) {
+      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      const g = grad(x, y, z); normals.set(g, i * 3);
+      let occ = 0, w = 1;
+      for (const s of [0.025, 0.06, 0.12]) { occ += (s - sdf(x + g[0] * s, y + g[1] * s, z + g[2] * s)) / s * w; w *= 0.55; }
+      const ao = Math.min(1, Math.max(0, 1 - occ * 0.55));
+      const m = Math.pow(ao, 1.6);
+      colors[i * 3] = GLAZE_SHADE.r + (GLAZE.r - GLAZE_SHADE.r) * m;
+      colors[i * 3 + 1] = GLAZE_SHADE.g + (GLAZE.g - GLAZE_SHADE.g) * m;
+      colors[i * 3 + 2] = GLAZE_SHADE.b + (GLAZE.b - GLAZE_SHADE.b) * m;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setIndex(idx);
+    return geo;
+  }
+
+  // 머리 위 나발(곱슬 구슬), 얼굴 선
+  function surfaceAlong(ox, oy, oz, dx, dy, dz, r0, r1, step) {
+    let r = r0;
+    while (r > r1 && sdf(ox + dx * r, oy + dy * r, oz + dz * r) > 0) r -= step;
+    let a = r, b = r + step;
+    for (let i = 0; i < 24; i++) { const m = (a + b) / 2; if (sdf(ox + dx * m, oy + dy * m, oz + dz * m) > 0) b = m; else a = m; }
+    return (a + b) / 2;
+  }
+  const surfaceZ = (x, y) => surfaceAlong(x, y, 0, 0, 0, 1, 0.7, -0.2, 0.01);
+
+  function buildCurls(material) {
+    const pts = [], P0 = [0, 1.62, 0.0], ring = 0.15;
+    const sstep = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
+    for (let ri = 0, e = -1.05; e < Math.PI / 2 - 0.05; ri++, e += ring) {
+      const cnt = Math.max(1, Math.round(33 * Math.cos(e)));
+      for (let j = 0; j < cnt; j++) {
+        const az = ((j + (ri % 2) * 0.5) / cnt) * Math.PI * 2;
+        const dx = Math.sin(az) * Math.cos(e), dy = Math.sin(e), dz = Math.cos(az) * Math.cos(e);
+        const r = surfaceAlong(P0[0], P0[1], P0[2], dx, dy, dz, 0.7, 0.05, 0.01);
+        const x = P0[0] + dx * r, y = P0[1] + dy * r, z = P0[2] + dz * r;
+        const hairY = 1.40 + 0.265 * sstep(-0.6, 0.15, Math.cos(az));
+        if (y < hairY) continue;
+        pts.push([x + dx * 0.004, y + dy * 0.004, z + dz * 0.004]);
+      }
+    }
+    const geo = new THREE.SphereGeometry(1, 18, 14);
+    const mesh = new THREE.InstancedMesh(geo, material, pts.length);
+    const m = new THREE.Matrix4(), s = 0.03;
+    pts.forEach((p, i) => { m.makeScale(s, s * 0.92, s); m.setPosition(p[0], p[1], p[2]); mesh.setMatrixAt(i, m); });
+    return mesh;
+  }
+
+  function buildFace(glazeMat, lineMat) {
+    const g = new THREE.Group();
+    const arc = (fn, n, r, mat) => {
+      const pts = [];
+      for (let i = 0; i <= n; i++) { const u = i / n, [x, y] = fn(u); pts.push(new THREE.Vector3(x, y, surfaceZ(x, y) + 0.002)); }
+      g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, r, 8), mat));
+    };
+    for (const s of [-1, 1]) {
+      arc((u) => [s * (0.04 + 0.085 * u), 1.535 - 0.016 * Math.sin(Math.PI * u) + 0.006 * u], 14, 0.0048, lineMat); // 감은 눈
+      arc((u) => [s * (0.025 + 0.12 * u), 1.585 + 0.016 * Math.sin(Math.PI * u) - 0.012 * u], 14, 0.009, glazeMat);  // 눈썹
+    }
+    arc((u) => [-0.042 + 0.084 * u, 1.372 - 0.004 * Math.sin(Math.PI * u) + 0.01 * Math.pow(2 * u - 1, 2)], 12, 0.0042, lineMat); // 입
+    for (const [y, ry] of [[1.383, 0.011], [1.361, 0.013]]) {
+      const l = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12), glazeMat);
+      l.scale.set(0.04, ry, 0.014); l.position.set(0, y, surfaceZ(0, y) + 0.001); g.add(l);
+    }
+    const urna = new THREE.Mesh(new THREE.SphereGeometry(0.0125, 16, 12), glazeMat);
+    urna.position.set(0, 1.595, surfaceZ(0, 1.595) + 0.001); g.add(urna);
+    return g;
+  }
+
+  // ---------- 장면 ----------
+  const stage = document.getElementById('stage');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  stage.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+  const HOME = new THREE.Vector3(0.0, 1.0, 5.0), TARGET = new THREE.Vector3(0, 0.93, 0);
+  camera.position.copy(HOME);
+
+  // 스튜디오 반사광(소프트박스) 환경맵: 유광 도자기 하이라이트를 만든다
+  (function makeEnv() {
+    const W = 1024, Hh = 512, c = document.createElement('canvas'); c.width = W; c.height = Hh;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 0, Hh);
+    g.addColorStop(0, '#fffafa'); g.addColorStop(0.45, '#d9cdd0'); g.addColorStop(0.5, '#a89ca0'); g.addColorStop(1, '#5e5256');
+    x.fillStyle = g; x.fillRect(0, 0, W, Hh);
+    const box = (u, v, w, h, a) => { // u: 0..1 방위(0.5=정면 반대편 아님, 카메라 기준 뒤쪽 0), v: 0=천정 1=바닥
+      x.fillStyle = 'rgba(255,255,255,' + a + ')';
+      x.beginPath(); if (x.roundRect) x.roundRect(u * W - w / 2, v * Hh - h / 2, w, h, 24); else x.rect(u * W - w / 2, v * Hh - h / 2, w, h); x.fill();
+    };
+    box(0.62, 0.22, 170, 110, 1);   // 정면 왼쪽 위 키라이트
+    box(0.88, 0.40, 60, 190, 0.95); // 오른쪽 세로 스트립
+    box(0.25, 0.18, 150, 90, 0.9);  // 뒤쪽 위
+    box(0.40, 0.42, 70, 150, 0.8);  // 뒤쪽 옆
+    box(0.5, 0.05, 420, 50, 0.9);   // 천정
+    const t = new THREE.CanvasTexture(c); t.mapping = THREE.EquirectangularReflectionMapping; t.encoding = THREE.sRGBEncoding;
+    const pm = new THREE.PMREMGenerator(renderer);
+    scene.environment = pm.fromEquirectangular(t).texture;
+    pm.dispose(); t.dispose();
+  })();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xd9bfc8, 0.35));
+  const key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(-3, 5, 4); scene.add(key);
+  const rim = new THREE.DirectionalLight(0xffe9f0, 0.35); rim.position.set(4, 3, -4); scene.add(rim);
+
+  // 바닥 그림자
+  (function () {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const x = c.getContext('2d'), g = x.createRadialGradient(64, 64, 4, 64, 64, 62);
+    g.addColorStop(0, 'rgba(60,30,40,0.5)'); g.addColorStop(0.55, 'rgba(60,30,40,0.18)'); g.addColorStop(1, 'rgba(60,30,40,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 2.5), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+    m.rotation.x = -Math.PI / 2; m.position.y = 0.001; scene.add(m);
+  })();
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.copy(TARGET);
+  controls.enableDamping = true; controls.dampingFactor = 0.07;
+  controls.enablePan = false;
+  controls.minDistance = 2.4; controls.maxDistance = 8;
+  controls.minPolarAngle = 0.25; controls.maxPolarAngle = Math.PI * 0.56;
+  controls.rotateSpeed = 0.9;
+  controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
+
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.fov = w / h < 0.8 ? 46 : 32; // 세로 화면에서는 시야각을 넓혀 모델이 잘리지 않게
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(stage); resize();
+
+  // ---------- 조작 UI ----------
+  const autoBtn = document.getElementById('auto'), hint = document.getElementById('hint');
+  function setAuto(on) { controls.autoRotate = on; autoBtn.setAttribute('aria-pressed', String(on)); }
+  autoBtn.onclick = () => setAuto(!controls.autoRotate);
+  controls.addEventListener('start', () => { setAuto(false); hint.style.opacity = 0; });
+  let tween = null;
+  function flyTo(az) {
+    const off = camera.position.clone().sub(controls.target), r = 5, pol = 1.45;
+    const from = Math.atan2(off.x, off.z); let d = az - from; d = Math.atan2(Math.sin(d), Math.cos(d));
+    const fromPol = Math.acos(off.y / off.length()), fromR = off.length();
+    tween = { t0: performance.now(), from, d, fromPol, pol, fromR, r };
+    setAuto(false);
+  }
+  document.getElementById('reset').onclick = () => flyTo(0);
+  document.getElementById('back').onclick = () => flyTo(Math.PI);
+
+  let ready = false;
+  (function loop() {
+    requestAnimationFrame(loop);
+    if (tween) {
+      const t = Math.min(1, (performance.now() - tween.t0) / 800), e = t * t * (3 - 2 * t);
+      const az = tween.from + tween.d * e, pol = tween.fromPol + (tween.pol - tween.fromPol) * e, r = tween.fromR + (tween.r - tween.fromR) * e;
+      camera.position.set(controls.target.x + r * Math.sin(pol) * Math.sin(az), controls.target.y + r * Math.cos(pol), controls.target.z + r * Math.sin(pol) * Math.cos(az));
+      if (t >= 1) tween = null;
+    }
+    controls.update();
+    if (ready) renderer.render(scene, camera);
+  })();
+
+  // ---------- 모델 생성 ----------
+  setTimeout(() => {
+    const glaze = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff, vertexColors: true, roughness: 0.2, metalness: 0,
+      clearcoat: 1, clearcoatRoughness: 0.04, reflectivity: 0.55, envMapIntensity: 0.85
+    });
+    const solid = new THREE.MeshPhysicalMaterial({ color: GLAZE, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.04, reflectivity: 0.55, envMapIntensity: 0.85 });
+    const lineMat = new THREE.MeshPhysicalMaterial({ color: LINE, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 });
+    const statue = new THREE.Group();
+    statue.add(new THREE.Mesh(buildBody(), glaze));
+    statue.add(buildCurls(solid));
+    statue.add(buildFace(solid, lineMat));
+    scene.add(statue);
+    ready = true;
+    const l = document.getElementById('loading'); l.style.opacity = 0; setTimeout(() => l.remove(), 600);
+    window.__statueReady = true;
+  }, 50);
+})();
+</script>
