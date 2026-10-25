@@ -13,6 +13,7 @@
   #light .layer { position: absolute; inset: 0; }
   #vignette { position: fixed; inset: 0; pointer-events: none;
               background: radial-gradient(ellipse at 50% 45%, transparent 40%, rgba(0,0,0,.55) 100%); }
+  #gl { filter: drop-shadow(0 0 10px var(--g1, rgba(255,150,70,.6))) drop-shadow(0 0 46px var(--g2, rgba(255,140,60,.45))); }
   #gl, #hud { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; touch-action: none; }
   #hint { position: fixed; left: 0; right: 0; bottom: 56px; text-align: center; font-size: 14px;
           letter-spacing: .02em; opacity: .85; text-shadow: 0 1px 8px rgba(0,0,0,.6); padding: 0 16px; }
@@ -53,24 +54,24 @@ const hint = $('#hint'), lightEl = $('#light'), dots = [...document.querySelecto
 
 /* ---------------- light stages (이미지 1~4의 빛) ---------------- */
 /* 거리에 따라 부드럽게 줄어드는 빛 웅덩이 (역제곱 느낌) */
-function pool(x, y, rgb, a, R) {
+function pool(x, y, rgb, a, R, asp = 0.55) {
   const stops = [0, .06, .14, .26, .42, .62, .82, 1].map(t => {
-    const al = a * Math.exp(-3.4 * t) * (1 - t * t * t);
+    const al = 1.4 * a * Math.exp(-3.4 * t) * (1 - t * t * t);
     return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${al.toFixed(3)}) ${(t * 100).toFixed(0)}%`;
   });
-  return `radial-gradient(circle ${R.toFixed(0)}px at ${x.toFixed(0)}px ${y.toFixed(0)}px, ${stops.join(',')})`;
+  return `radial-gradient(ellipse ${(R * asp).toFixed(0)}px ${R.toFixed(0)}px at ${x.toFixed(0)}px ${y.toFixed(0)}px, ${stops.join(',')})`;
 }
 const STAGES = [
   { name: '주황 펜던트', edge: 0xe8873a, core: 0xffd9a0, halo: 0xff9a4a,
-    bg: (x, y) => [pool(x, y, [255, 205, 140], .5, SH * .45), pool(x, y, [255, 150, 70], .5, SH * 1.05), pool(x, y, [200, 90, 40], .22, SW * 1.1)].join(',') },
+    bg: (x, y) => [pool(x, y, [255, 205, 140], .32, SH * .5), pool(x, y, [255, 150, 70], .5, SH * 1.05), pool(x, y, [200, 90, 40], .22, SW * 1.1, 1)].join(',') },
   { name: '핑크 종이등', edge: 0xf0788a, core: 0xffcdc4, halo: 0xff8099,
-    bg: (x, y) => [pool(x, y, [255, 200, 205], .45, SH * .4), pool(x, y, [255, 130, 160], .52, SH * 1.1), pool(x, y, [190, 70, 110], .24, SW * 1.1)].join(',') },
+    bg: (x, y) => [pool(x, y, [255, 200, 205], .3, SH * .4), pool(x, y, [255, 130, 160], .52, SH * 1.1), pool(x, y, [190, 70, 110], .24, SW * 1.1, 1)].join(',') },
   { name: '노을 침실', edge: 0xf59058, core: 0xffdba0, halo: 0xffc23c,
-    bg: (x, y) => [pool(SW * .8, SH * .6, [255, 205, 50], .55, SW * .62), pool(x, y, [255, 190, 150], .4, SH * .42),
-                   pool(x, y, [255, 140, 120], .42, SH * 1.1), pool(x, y, [200, 90, 80], .2, SW * 1.1)].join(',') },
+    bg: (x, y) => [pool(SW * .8, SH * .6, [255, 205, 50], .55, SW * .62, 1), pool(x, y, [255, 190, 150], .28, SH * .42),
+                   pool(x, y, [255, 140, 120], .42, SH * 1.1), pool(x, y, [200, 90, 80], .2, SW * 1.1, 1)].join(',') },
   { name: '보라 라운지', edge: 0xb060d8, core: 0xffc6ef, halo: 0xc062ff,
-    bg: (x, y) => [pool(SW * .5, SH * .95, [255, 175, 90], .4, SW * .5), pool(x, y, [255, 190, 240], .42, SH * .42),
-                   pool(x, y, [235, 110, 235], .5, SH * 1.1), pool(x, y, [120, 50, 160], .26, SW * 1.1)].join(',') },
+    bg: (x, y) => [pool(SW * .5, SH * .95, [255, 175, 90], .4, SW * .5, .45), pool(x, y, [255, 190, 240], .3, SH * .42),
+                   pool(x, y, [235, 110, 235], .5, SH * 1.1), pool(x, y, [120, 50, 160], .26, SW * 1.1, 1)].join(',') },
 ];
 let stage = 0;
 
@@ -212,12 +213,7 @@ const lanterns = DEFS.map((d, i) => {
   const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, ropeLen, 6), ropeMat);
   rope.position.y = d.cy + d.H / 2 - PIVOT_Y + ropeLen / 2; pivot.add(rope);
 
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color: haloCol, blending: THREE.AdditiveBlending, transparent: true, opacity: .55, depthWrite: false }));
-  halo.scale.set(d.W * 2.6, d.W * 2.2, 1); halo.position.set(0, 0, -0.8); body.add(halo);
-  const bulb = new THREE.Sprite(new THREE.SpriteMaterial({ map: bulbTex, color: 0xfff0c8, blending: THREE.AdditiveBlending, transparent: true, opacity: .4, depthTest: false, depthWrite: false }));
-  bulb.scale.set(d.W * 0.42, d.W * 0.42, 1); bulb.position.set(0, 0, 0.2); body.add(bulb);
-
-  return { pivot, d, halo, bulb, ang: 0, vel: 0, phase: i * 1.7 };
+  return { pivot, d, ang: 0, vel: 0, phase: i * 1.7 };
 });
 
 /* 당김 줄 */
@@ -389,12 +385,12 @@ function frame(now) {
   ribMat.color.copy(edgeCol).multiplyScalar(0.42);
   fabricUniforms.uFlick.value = 1 + Math.sin(time * 2.3) * 0.012 + Math.sin(time * 5.1) * 0.008;
   lanterns.forEach((l) => {
-    const flick = 1 + Math.sin(time * 3 + l.phase) * 0.015;
-    l.vel += (-l.ang * 14 - l.vel * 1.4) * dt; l.ang += l.vel * dt;
+        l.vel += (-l.ang * 14 - l.vel * 1.4) * dt; l.ang += l.vel * dt;
     l.pivot.rotation.z = l.ang * 0.35 + Math.sin(time * 0.7 + l.phase) * 0.012;
-    l.halo.material.color.copy(haloCol); l.halo.material.opacity = 0.42 * flick;
-    l.bulb.material.color.copy(coreCol);
   });
+  const gc = haloCol.getStyle();
+  glCanvas.style.setProperty('--g1', gc.replace('rgb(', 'rgba(').replace(')', ',.55)'));
+  glCanvas.style.setProperty('--g2', gc.replace('rgb(', 'rgba(').replace(')', ',.4)'));
   renderer.render(scene, camera);
 
   // HUD: 손끝 표시
