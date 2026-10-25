@@ -8,6 +8,7 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d10; color: #fff;
                font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   video { display: none; }
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
            justify-content: center; gap: 14px; background: rgba(40,36,32,.5); text-align: center; padding: 24px; }
@@ -29,6 +30,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="gl"></canvas>
 <video id="cam" playsinline muted></video>
 <div id="start">
   <h1>String Curtain</h1>
@@ -39,6 +41,7 @@
 <button id="lightBtn">빛 조절</button>
 <div id="panel" hidden></div>
 <div id="msg"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ============ 여기만 바꾸면 됩니다 ============ */
 
@@ -140,6 +143,74 @@ function shapePath(c, type, w, h) {
   } else c.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);   // disc, oval
 }
 
+/* ============ 3D 조각 (three.js) ============ */
+let renderer = null, scene, camera, glGroup, discGeo, holeGeo, holeMat;
+const matCache = {};
+try { if (typeof THREE !== "undefined") renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("gl"), alpha: true, antialias: true }); } catch (e) { renderer = null; }
+const USE_GL = !!renderer;   // 3D를 못 쓰는 기기에서는 평면 그림으로 대신 보여줘요
+if (!USE_GL) document.getElementById("gl").style.display = "none";
+
+function initGL() {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(24, 1, 10, 20000);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x6b5a80, 0.85));                    // 부드러운 전체 조명
+  const key = new THREE.DirectionalLight(0xfff0dc, 1.15); key.position.set(-600, 700, 900); scene.add(key);   // 왼쪽 위 햇빛
+  const fill = new THREE.DirectionalLight(0xbfa8ff, 0.35); fill.position.set(700, -300, 500); scene.add(fill);
+  // 살짝 볼록한 원판(윗면·옆면·아랫면)을 한 번 만들어 모든 조각이 크기만 바꿔 씀
+  const prof = [], N = 14, TH = 0.5, BULGE = 0.38;
+  for (let i = 0; i <= N; i++) { const q = i / N; prof.push(new THREE.Vector2(q, TH + BULGE * (1 - q * q))); }
+  for (let i = N; i >= 0; i--) { const q = i / N; prof.push(new THREE.Vector2(q, -(TH + BULGE * (1 - q * q)))); }
+  discGeo = new THREE.LatheGeometry(prof, 48); discGeo.rotateX(Math.PI / 2);
+  const pos = discGeo.attributes.position, uv = new Float32Array(pos.count * 2), col = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), q = Math.hypot(x, y);
+    uv[i * 2] = x * 0.5 + 0.5; uv[i * 2 + 1] = y * 0.5 + 0.5;                       // 사진을 위에서 내려다보듯 입힘
+    const t = Math.min(1, Math.max(0, (q - 0.88) / 0.12)), f = 1 - 0.55 * t * t * (3 - 2 * t);   // 가장자리 단면은 어둡게
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = f;
+  }
+  discGeo.setAttribute("uv", new THREE.BufferAttribute(uv, 2)); discGeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const hc = document.createElement("canvas"); hc.width = hc.height = 64; const h = hc.getContext("2d");   // 실 구멍
+  h.fillStyle = "rgba(255,255,255,0.55)"; h.beginPath(); h.arc(32, 33, 17, 0, Math.PI * 2); h.fill();
+  h.fillStyle = "rgba(24,12,34,1)"; h.beginPath(); h.arc(32, 32, 13, 0, Math.PI * 2); h.fill();
+  holeMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(hc), transparent: true, depthWrite: false });
+  holeGeo = new THREE.PlaneGeometry(7.5, 7.5);
+}
+
+function getMat(ti, rb, flip) {                         // 사진 4장 × 방향 8가지 × 좌우반전 = 필요한 만큼만 만들어 재사용
+  const key = ti + "_" + rb + "_" + flip;
+  if (matCache[key]) return matCache[key];
+  const t = new THREE.Texture(TEX[ti]); t.needsUpdate = true; t.encoding = THREE.sRGBEncoding; t.anisotropy = 4;
+  const kk = [1.2, 1.2, 1.42, 1.25][ti];                // 사진 가장자리의 구슬·실 자국이 안 보이게 확대
+  t.center.set(0.5, 0.5); t.rotation = rb * Math.PI / 4;
+  t.repeat.set((flip ? -1 : 1) / kk, 1 / kk);          // 가운데를 기준으로 확대(+좌우반전)·회전
+  return matCache[key] = new THREE.MeshPhysicalMaterial({ map: t, vertexColors: true, roughness: 0.32, metalness: 0.05,
+    clearcoat: 1, clearcoatRoughness: 0.2, emissive: 0x20103a, emissiveIntensity: 0.25, side: THREE.DoubleSide });
+}
+
+function makeMesh(p) {
+  const g = new THREE.Group(); g.rotation.order = "ZYX";
+  const body = new THREE.Mesh(discGeo, getMat(Math.floor(Math.random() * TEX.length), Math.floor(Math.random() * 8), Math.random() < 0.5 ? 1 : 0));
+  const zs = 3.2 + p.m * 0.9;                           // 무거운 조각일수록 두껍게
+  body.scale.set(p.w / 2, p.h / 2, zs); g.add(body);
+  const inset = Math.max(5, p.h * 0.12);
+  for (const sg of [1, -1]) {
+    const hy = sg * (p.h / 2 - inset), q = Math.abs(hy) / (p.h / 2);
+    const m = new THREE.Mesh(holeGeo, holeMat); m.position.set(0, hy, (0.5 + 0.38 * (1 - q * q)) * zs + 0.2); g.add(m);
+  }
+  p.zo = Math.random() * 14; return g;
+}
+
+function syncMeshes(now) {
+  for (const pts of strings) for (let i = 1; i < pts.length; i++) {
+    const p = pts[i], a = pts[i - 1], b = pts[Math.min(i + 1, pts.length - 1)];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.PI / 2 + p.sw + p.tilt;
+    p.obj.position.set(p.x, H - p.y, p.zo);
+    p.obj.rotation.set(Math.sin(now * 0.0007 + p.ph) * 0.1, p.yaw * 1.5, -ang);   // 세로축으로 도는 3D 회전
+  }
+}
+
 // 보라색 조개 조각: 실제 사진 질감 + 두께·그림자·구멍을 얹어 입체감을 냄 (빛은 왼쪽 위에서)
 function makeSprite(type, w, h, col) {
   const pad = 7, cw = Math.ceil((w + pad * 2) * S), ch = Math.ceil((h + pad * 2) * S);
@@ -191,7 +262,7 @@ function makePiece(big) {
   const m = Math.max(0.5, Math.min(2.8, (w * h) / 2400)), k = 1 / m;     // 클수록 무겁다
   const col = pick(PALETTE);
   return { w, h, m, k, type, col, r: (w + h) / 4, ret: 0.5 + 0.5 * k, damp: 0.978 + 0.012 * (m / 2.8),
-           sw: 0, last: 0, lsw: 0, yaw: 0, ph: rnd(0, 6.28), tilt: rnd(-0.08, 0.08), la: rnd(0.7, 1), sprite: makeSprite(type, w, h, col) };
+           sw: 0, last: 0, lsw: 0, yaw: 0, ph: rnd(0, 6.28), tilt: rnd(-0.08, 0.08), la: rnd(0.7, 1), sprite: USE_GL ? null : makeSprite(type, w, h, col) };
 }
 
 function build() {
@@ -199,6 +270,15 @@ function build() {
   W = innerWidth; H = innerHeight;
   cv.width = W * dpr; cv.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (USE_GL) {
+    if (!scene) initGL();
+    renderer.setSize(W, H, false);
+    camera.aspect = W / H;
+    const d = (H / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    camera.position.set(W / 2, H / 2, d); camera.lookAt(W / 2, H / 2, 0); camera.updateProjectionMatrix();
+    if (glGroup) scene.remove(glGroup);
+    glGroup = new THREE.Group(); scene.add(glGroup);
+  }
   strings = [];
   const count = Math.max(3, Math.floor(W / STRING_SPACING));
   const x0 = (W - (count - 1) * STRING_SPACING) / 2;
@@ -211,6 +291,7 @@ function build() {
       const len = i === 1 ? p.h / 2 + 20 : prevH / 2 + p.h / 2 + PIECE_GAP;
       y += len; prevH = p.h;
       Object.assign(p, { x, y, px: x, py: y, rx: x, ry: y, len, lx: x, ly: y });
+      if (USE_GL) { p.obj = makeMesh(p); glGroup.add(p.obj); }
       pts.push(p);
     }
     strings.push(pts);
@@ -422,8 +503,13 @@ function draw() {
       const p = pts[i], a = pts[i - 1], b = pts[Math.min(i + 1, pts.length - 1)];
       const ang = Math.atan2(b.y - a.y, b.x - a.x) - Math.PI / 2 + p.sw + p.tilt;
       ctx.save();
-      ctx.translate(p.x, p.y); ctx.rotate(ang); ctx.scale(Math.max(0.38, Math.cos(p.yaw)), 1);
-      ctx.drawImage(p.sprite, -p.sprite.width / S / 2, -p.sprite.height / S / 2, p.sprite.width / S, p.sprite.height / S);
+      if (USE_GL) {                                      // 3D 조각 아래에 깔리는 부드러운 그림자
+        ctx.translate(p.x + 8, p.y + 11); ctx.rotate(ang); ctx.scale(Math.max(0.38, Math.cos(p.yaw * 1.5)), 1);
+        ctx.fillStyle = "rgba(30,15,50,0.13)"; ctx.beginPath(); ctx.ellipse(0, 0, p.w / 2, p.h / 2, 0, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.translate(p.x, p.y); ctx.rotate(ang); ctx.scale(Math.max(0.38, Math.cos(p.yaw)), 1);
+        ctx.drawImage(p.sprite, -p.sprite.width / S / 2, -p.sprite.height / S / 2, p.sprite.width / S, p.sprite.height / S);
+      }
       ctx.restore();
     }
   }
@@ -572,7 +658,7 @@ document.getElementById("btnCam").onclick = async () => {
   }
 };
 
-function loop(now) { try { track(); } catch (e) { console.error(e); } step(now); updateLight(now); updateAudio(now); draw(); requestAnimationFrame(loop); }
+function loop(now) { try { track(); } catch (e) { console.error(e); } step(now); updateLight(now); updateAudio(now); draw(); if (USE_GL) { syncMeshes(now); renderer.render(scene, camera); } requestAnimationFrame(loop); }
 addEventListener("resize", build);
 Promise.all(TEX.map(i => i.decode().catch(() => {}))).then(() => { build(); requestAnimationFrame(loop); });
 </script>
